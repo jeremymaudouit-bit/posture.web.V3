@@ -14,11 +14,10 @@ st.set_page_config(page_title="Analyseur Postural Pro (MoveNet)", layout="wide")
 # ================= 2. CHARGEMENT DU MODÈLE MOVENET =================
 @st.cache_resource
 def load_movenet():
-    model = tf.saved_model.load(
-        "https://tfhub.dev/google/movenet/singlepose/lightning/4",
-        tags=["serve"]
-    )
-    return model.signatures['serving_default']
+    import tensorflow_hub as hub
+    import tensorflow as tf
+    model = hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
+    return model
 
 movenet = load_movenet()
 
