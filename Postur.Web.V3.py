@@ -9,13 +9,16 @@ import tensorflow as tf
 import tensorflow_hub as hub
 import os
 
+# Pour le flux caméra
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+import av
+
 # ================= 1. CONFIG STREAMLIT =================
 st.set_page_config(page_title="Analyseur Postural Pro", layout="wide")
 
 # ================= 2. CHARGEMENT MOVENET =================
 @st.cache_resource
 def load_movenet():
-    # Utilisation du modèle Lightning (rapide)
     model = hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
     return model
 
@@ -109,14 +112,37 @@ col_input, col_result = st.columns([1, 1])
 image_data = None
 with col_input:
     if source == "📷 Caméra":
-        image_data = st.camera_input("Capturez la posture de face")
+        st.write("Sélectionnez la caméra et capturez l'image.")
+
+        class FrameCapture(VideoTransformerBase):
+            def __init__(self):
+                self.frame = None
+
+            def transform(self, frame: av.VideoFrame) -> av.VideoFrame:
+                self.frame = frame.to_ndarray(format="bgr24")
+                return frame
+
+        ctx = webrtc_streamer(key="example", video_transformer_factory=FrameCapture)
+
+        capture_button = st.button("📸 Capturer l'image")
+        if capture_button and ctx.video_transformer:
+            frame = ctx.video_transformer.frame
+            if frame is not None:
+                image_data = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            else:
+                st.warning("Aucune image capturée pour l'instant.")
+                
     else:
         image_data = st.file_uploader("Format JPG/PNG", type=["jpg", "png", "jpeg"])
 
 # ================= 5. COEUR DE L'ANALYSE =================
 if image_data:
-    img = Image.open(image_data).convert('RGB')
-    img_np = np.array(img)
+    if not isinstance(image_data, np.ndarray):
+        img = image_data if isinstance(image_data, Image.Image) else Image.open(image_data)
+        img = img.convert('RGB')
+        img_np = np.array(img)
+    else:
+        img_np = np.array(image_data)
 
     # Correction d'orientation automatique
     if img_np.shape[1] > img_np.shape[0]:
@@ -142,12 +168,10 @@ if image_data:
             LA, RA = pt(15), pt(16) # Chevilles
 
             # --- Calcul des angles (Référence 0° = Horizontal) ---
-            # Épaules
             raw_shoulder_angle = math.degrees(math.atan2(LS[1]-RS[1], LS[0]-RS[0]))
             shoulder_angle = abs(raw_shoulder_angle)
             if shoulder_angle > 90: shoulder_angle = abs(shoulder_angle - 180)
 
-            # Bassin
             raw_hip_angle = math.degrees(math.atan2(LH[1]-RH[1], LH[0]-RH[0]))
             hip_angle = abs(raw_hip_angle)
             if hip_angle > 90: hip_angle = abs(hip_angle - 180)
@@ -168,8 +192,6 @@ if image_data:
             points_list = [LS, RS, LH, RH, LK, RK, LA, RA]
             for p in points_list:
                 cv2.circle(annotated, tuple(p.astype(int)), 8, (0, 255, 0), -1)
-            
-            # Dessin des lignes d'inclinaison
             cv2.line(annotated, tuple(LS.astype(int)), tuple(RS.astype(int)), (255, 0, 0), 3)
             cv2.line(annotated, tuple(LH.astype(int)), tuple(RH.astype(int)), (255, 0, 0), 3)
 
