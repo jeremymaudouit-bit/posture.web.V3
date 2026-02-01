@@ -81,7 +81,7 @@ if image_data:
     if st.button("⚙️ LANCER L'ANALYSE", use_container_width=True):
         with st.spinner("Analyse IA en cours..."):
             input_tensor = preprocess(img_np)
-            outputs = movenet(input_tensor)
+            outputs = movenet.signatures['serving_default'](input_tensor)
             keypoints = outputs['output_0'][0][0].numpy()
 
             pts = {}
