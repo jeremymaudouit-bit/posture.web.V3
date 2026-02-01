@@ -9,10 +9,6 @@ import tensorflow as tf
 import tensorflow_hub as hub
 import os
 
-# Pour le flux caméra
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
-import av
-
 # ================= 1. CONFIG STREAMLIT =================
 st.set_page_config(page_title="Analyseur Postural Pro", layout="wide")
 
@@ -112,37 +108,19 @@ col_input, col_result = st.columns([1, 1])
 image_data = None
 with col_input:
     if source == "📷 Caméra":
-        st.write("Sélectionnez la caméra et capturez l'image.")
-
-        class FrameCapture(VideoTransformerBase):
-            def __init__(self):
-                self.frame = None
-
-            def transform(self, frame: av.VideoFrame) -> av.VideoFrame:
-                self.frame = frame.to_ndarray(format="bgr24")
-                return frame
-
-        ctx = webrtc_streamer(key="example", video_transformer_factory=FrameCapture)
-
-        capture_button = st.button("📸 Capturer l'image")
-        if capture_button and ctx.video_transformer:
-            frame = ctx.video_transformer.frame
-            if frame is not None:
-                image_data = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            else:
-                st.warning("Aucune image capturée pour l'instant.")
-                
+        st.write("La caméra par défaut du navigateur sera utilisée.")
+        image_data = st.camera_input("Capturez la posture de face")
     else:
         image_data = st.file_uploader("Format JPG/PNG", type=["jpg", "png", "jpeg"])
 
 # ================= 5. COEUR DE L'ANALYSE =================
 if image_data:
-    if not isinstance(image_data, np.ndarray):
-        img = image_data if isinstance(image_data, Image.Image) else Image.open(image_data)
-        img = img.convert('RGB')
+    if isinstance(image_data, Image.Image):
+        img = image_data.convert('RGB')
         img_np = np.array(img)
     else:
-        img_np = np.array(image_data)
+        img = Image.open(image_data).convert('RGB')
+        img_np = np.array(img)
 
     # Correction d'orientation automatique
     if img_np.shape[1] > img_np.shape[0]:
