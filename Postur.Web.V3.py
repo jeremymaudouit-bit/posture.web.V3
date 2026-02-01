@@ -33,7 +33,7 @@ def calculate_angle(p1, p2, p3):
     mag = np.linalg.norm(v1) * np.linalg.norm(v2)
     if mag == 0:
         return 0
-    return np.degrees(np.arccos(np.clip(dot / mag, -1, 1)))
+    return math.degrees(math.acos(np.clip(dot / mag, -1, 1)))
 
 
 def tibia_vertical_angle(knee, ankle):
@@ -43,10 +43,10 @@ def tibia_vertical_angle(knee, ankle):
     mag = np.linalg.norm(v)
     if mag == 0:
         return 0
-    return np.degrees(np.arccos(np.clip(dot / mag, -1, 1)))
+    return math.degrees(math.acos(np.clip(dot / mag, -1, 1)))
 
 
-def generate_pdf(data):
+def generate_pdf(data, img_np):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", 'B', 16)
@@ -56,6 +56,14 @@ def generate_pdf(data):
     pdf.cell(0, 8, f"Nom : {data['Nom']}", ln=True)
     pdf.cell(0, 8, f"Date : {datetime.now().strftime('%d/%m/%Y')}", ln=True)
     pdf.ln(5)
+
+    # Ajout de la photo
+    img_pil = Image.fromarray(img_np)
+    img_path = "temp_image.png"
+    img_pil.save(img_path)
+    pdf.image(img_path, x=30, w=pdf.w - 60)
+    pdf.ln(5)
+
     for k, v in data.items():
         if k not in ['Nom']:
             pdf.cell(0, 8, f"{k} : {v}", ln=True)
@@ -111,15 +119,21 @@ if image_data:
             LK, RK = pt(13), pt(14)
             LA, RA = pt(15), pt(16)
 
-            # Angles
+            # Angles épaules et bassin en [-180,180]
             shoulder_angle = math.degrees(math.atan2(LS[1]-RS[1], LS[0]-RS[0]))
             hip_angle = math.degrees(math.atan2(LH[1]-RH[1], LH[0]-RH[0]))
+            if hip_angle > 180:
+                hip_angle -= 360
+            elif hip_angle < -180:
+                hip_angle += 360
+
+            # Autres angles
             knee_l = calculate_angle(LH, LK, LA)
             knee_r = calculate_angle(RH, RK, RA)
             ankle_l = tibia_vertical_angle(LK, LA)
             ankle_r = tibia_vertical_angle(RK, RA)
 
-            # Différences en mm (échelle via taille)
+            # Différences en mm
             px_height = max(LA[1], RA[1]) - min(LS[1], RS[1])
             mm_per_px = (taille_cm * 10) / px_height if px_height > 0 else 0
             diff_shoulders_mm = abs(LS[1]-RS[1]) * mm_per_px
@@ -145,6 +159,6 @@ if image_data:
                 st.image(annotated, caption="Analyse posturale")
                 st.table(results)
 
-                pdf_path = generate_pdf(results)
+                pdf_path = generate_pdf(results, annotated)
                 with open(pdf_path, "rb") as f:
-                    st.download_button("📄 Télécharger le PDF", f, file_name=pdf_path)
+                    st.download_button("📄 Télécharger le PDF avec photo", f, file_name=pdf_path)
