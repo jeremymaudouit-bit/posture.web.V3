@@ -165,6 +165,10 @@ if image_data:
             diff_shoulders_mm = abs(LS[1]-RS[1]) * mm_per_px
             diff_hips_mm = abs(LH[1]-RH[1]) * mm_per_px
 
+            # Déterminer quel côté est le plus bas
+            shoulder_lower = "Gauche" if LS[1] > RS[1] else "Droite"
+            hip_lower = "Gauche" if LH[1] > RH[1] else "Droite"
+
             # Annotation visuelle
             annotated = img_np.copy()
             points_list = [LS, RS, LH, RH, LK, RK, LA, RA]
@@ -173,10 +177,19 @@ if image_data:
             cv2.line(annotated, tuple(LS.astype(int)), tuple(RS.astype(int)), (255, 0, 0), 3)
             cv2.line(annotated, tuple(LH.astype(int)), tuple(RH.astype(int)), (255, 0, 0), 3)
 
+            # Ajouter texte sur l'image
+            cv2.putText(annotated, f"Epaules: {shoulder_lower} plus basse",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(annotated, f"Bassin: {hip_lower} plus bas",
+                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+            # Résultats à afficher
             results = {
                 "Nom": nom,
                 "Inclinaison Épaules (Horizon = 0°)": f"{shoulder_angle:.1f}°",
+                "Épaule la plus basse": shoulder_lower,
                 "Inclinaison Bassin (Horizon = 0°)": f"{hip_angle:.1f}°",
+                "Bassin le plus bas": hip_lower,
                 "Dénivelé Épaules (mm)": f"{diff_shoulders_mm:.1f} mm",
                 "Dénivelé Bassin (mm)": f"{diff_hips_mm:.1f} mm",
                 "Angle Genou Gauche": f"{knee_l:.1f}°",
