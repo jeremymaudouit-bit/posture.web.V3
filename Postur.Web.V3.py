@@ -64,7 +64,8 @@ col_input, col_result = st.columns(2)
 
 with col_input:
     image_data = None
-    if source == "📷 Caméra":n        cam_file = st.camera_input("Prendre une photo")
+    if source == "📷 Caméra":
+        cam_file = st.camera_input("Prendre une photo")
         if cam_file:
             image_data = cam_file
     else:
