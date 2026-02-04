@@ -158,10 +158,11 @@ def extract_origin_points_from_mediapipe(img_rgb_uint8: np.ndarray):
         "Talon G": pt_px(L.LEFT_HEEL),
         "Talon D": pt_px(L.RIGHT_HEEL),
 
+        "Hanche G": pt_px(L.LEFT_HIP),
+        "Hanche D": pt_px(L.RIGHT_HIP),
+
         "_Epaule G": pt_px(L.LEFT_SHOULDER),
         "_Epaule D": pt_px(L.RIGHT_SHOULDER),
-        "_Hanche G": pt_px(L.LEFT_HIP),
-        "_Hanche D": pt_px(L.RIGHT_HIP),
     }
 
 def draw_preview(img_disp_rgb_uint8: np.ndarray, origin_points: dict, override_one: dict, scale: float) -> np.ndarray:
@@ -198,7 +199,6 @@ with st.sidebar:
     st.header("👤 Dossier Patient")
     nom = st.text_input("Nom complet", value="Anonyme")
     taille_cm = st.number_input("Taille (cm)", min_value=100, max_value=220, value=170)
-    vue = st.selectbox("Vue de la photo (choisie)", ["Face", "Dos"], index=0)
 
     st.divider()
     source = st.radio("Source de l'image", ["📷 Caméra", "📁 Téléverser une photo"])
@@ -207,7 +207,12 @@ with st.sidebar:
     st.subheader("🖱️ Correction avant analyse")
     enable_click_edit = st.checkbox("Activer correction par clic", value=True)
 
-    editable_points = ["Genou G", "Genou D", "Cheville G", "Cheville D", "Talon G", "Talon D"]
+    editable_points = [
+        "Hanche G", "Hanche D",
+        "Genou G", "Genou D",
+        "Cheville G", "Cheville D",
+        "Talon G", "Talon D",
+    ]
     point_to_edit = st.selectbox("Point à corriger", editable_points, disabled=not enable_click_edit)
 
     c1, c2 = st.columns(2)
@@ -350,9 +355,6 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
 
     shoulder_lower = "Gauche" if LS[1] > RS[1] else "Droite"
     hip_lower = "Gauche" if LH[1] > RH[1] else "Droite"
-    if vue == "Dos":
-        shoulder_lower = "Droite" if shoulder_lower == "Gauche" else "Gauche"
-        hip_lower = "Droite" if hip_lower == "Gauche" else "Gauche"
 
     # Annotated image
     ann_bgr = cv2.cvtColor(img_np.copy(), cv2.COLOR_RGB2BGR)
@@ -369,15 +371,12 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
 
     cv2.line(ann_bgr, tuple(LS.astype(int)), tuple(RS.astype(int)), (255, 0, 0), 3)
     cv2.line(ann_bgr, tuple(LH.astype(int)), tuple(RH.astype(int)), (255, 0, 0), 3)
-    cv2.putText(ann_bgr, f"Vue: {vue}", (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
     annotated = cv2.cvtColor(ann_bgr, cv2.COLOR_BGR2RGB)
     annotated = ensure_uint8_rgb(annotated)
 
     results = {
         "Nom": nom,
-        "Vue (choisie)": vue,
         "Inclinaison Épaules (0=horizon)": f"{shoulder_angle:.1f}°",
         "Épaule la plus basse": shoulder_lower,
         "Dénivelé Épaules (mm)": f"{diff_shoulders_mm:.1f} mm",
