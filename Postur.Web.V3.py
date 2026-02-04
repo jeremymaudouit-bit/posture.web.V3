@@ -38,7 +38,6 @@ def rotate_if_landscape(img_np):
     return img_np
 
 def calculate_angle(p1, p2, p3):
-    """Angle au point p2 entre segments p2->p1 et p2->p3."""
     v1 = np.array([p1[0]-p2[0], p1[1]-p2[1]], dtype=float)
     v2 = np.array([p3[0]-p2[0], p3[1]-p2[1]], dtype=float)
     dot = float(np.dot(v1, v2))
@@ -48,18 +47,15 @@ def calculate_angle(p1, p2, p3):
     return math.degrees(math.acos(np.clip(dot / mag, -1, 1)))
 
 def femur_tibia_knee_angle(hip, knee, ankle):
-    # Genou = Hanche–Genou–Cheville
-    return calculate_angle(hip, knee, ankle)
+    return calculate_angle(hip, knee, ankle)  # Hanche-Genou-Cheville
 
 def tibia_rearfoot_ankle_angle(knee, ankle, heel):
-    # Cheville = Genou–Cheville–Talon
-    return calculate_angle(knee, ankle, heel)
+    return calculate_angle(knee, ankle, heel)  # Genou-Cheville-Talon
 
 def safe_point(lm, landmark_enum, w, h):
     p = lm[landmark_enum.value]
     return np.array([p.x * w, p.y * h], dtype=np.float32), float(p.visibility)
 
-# -------- PDF safe (évite Unicode crash) --------
 def pdf_safe(text) -> str:
     if text is None:
         return ""
@@ -123,10 +119,11 @@ def generate_pdf(data, img_np):
 
 # ================= 3. SESSION =================
 if "overrides" not in st.session_state:
-    st.session_state["overrides"] = {}  # ex: {"Cheville G": (x,y)}
-
+    st.session_state["overrides"] = {}  # {"Cheville G": (x,y)}
 if "canvas_obj_count" not in st.session_state:
     st.session_state["canvas_obj_count"] = 0
+if "canvas_reset_key" not in st.session_state:
+    st.session_state["canvas_reset_key"] = 0
 
 # ================= 4. UI =================
 with st.sidebar:
@@ -139,7 +136,7 @@ with st.sidebar:
     source = st.radio("Source de l'image", ["📷 Caméra", "📁 Téléverser une photo"])
 
     st.divider()
-    st.subheader("🖱️ Correction de points (avant analyse)")
+    st.subheader("🖱️ Correction avant analyse")
     enable_click_edit = st.checkbox("Activer correction par clic", value=True)
 
     editable_points = ["Genou G", "Genou D", "Cheville G", "Cheville D", "Talon G", "Talon D"]
@@ -152,11 +149,12 @@ with st.sidebar:
     with c2:
         if st.button("🧹 Reset tous", disabled=not enable_click_edit):
             st.session_state["overrides"] = {}
+            st.session_state["canvas_obj_count"] = 0
+            st.session_state["canvas_reset_key"] += 1
 
 col_input, col_result = st.columns([1, 1])
 
 # ================= 5. INPUT IMAGE =================
-image_data = None
 with col_input:
     if source == "📷 Caméra":
         image_data = st.camera_input("Capturez la posture")
@@ -166,13 +164,10 @@ with col_input:
 if not image_data:
     st.stop()
 
-# Lire image
 if isinstance(image_data, Image.Image):
-    img = image_data.convert("RGB")
-    img_np = np.array(img)
+    img_np = np.array(image_data.convert("RGB"))
 else:
-    img = Image.open(image_data).convert("RGB")
-    img_np = np.array(img)
+    img_np = np.array(Image.open(image_data).convert("RGB"))
 
 img_np = rotate_if_landscape(img_np)
 h, w, _ = img_np.shape
@@ -180,18 +175,18 @@ h, w, _ = img_np.shape
 # ================= 6. CANVAS CLIQUABLE AVANT ANALYSE =================
 with col_input:
     st.subheader("📌 Cliquez pour placer le point choisi")
-    st.caption("Choisis un point à gauche, puis clique sur l'image. Ensuite lance l'analyse.")
+    st.caption("Choisis un point à gauche, clique sur l'image, puis lance l'analyse.")
 
-    # Affichage redimensionné (canvas)
     disp_w = min(900, w)
     scale = disp_w / w
     disp_h = int(h * scale)
 
     bg_rgb = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
     bg_rgb = cv2.resize(bg_rgb, (disp_w, disp_h), interpolation=cv2.INTER_AREA)
+    bg_pil = Image.fromarray(bg_rgb).convert("RGB")  # ✅ important
 
     canvas = st_canvas(
-        background_image=Image.fromarray(bg_rgb),
+        background_image=bg_pil,
         height=disp_h,
         width=disp_w,
         drawing_mode="point" if enable_click_edit else "transform",
@@ -199,36 +194,31 @@ with col_input:
         stroke_color="#ff00ff",
         fill_color="rgba(255,0,255,0.35)",
         update_streamlit=True,
-        key="canvas_pre"
+        key=f"canvas_pre_{st.session_state['canvas_reset_key']}"
     )
 
-    # Lire le dernier point cliqué (NOUVEAU)
     if enable_click_edit and canvas.json_data is not None:
         objs = canvas.json_data.get("objects", [])
         prev = st.session_state["canvas_obj_count"]
 
         if len(objs) > prev:
             obj = objs[-1]
-
-            # st_canvas "point" crée souvent un cercle => left/top + radius
             left = obj.get("left", None)
             top = obj.get("top", None)
             radius = obj.get("radius", 0)
 
             if left is not None and top is not None:
+                # ✅ centre réel du point
                 cx = float(left) + float(radius)
                 cy = float(top) + float(radius)
 
-                # Convert canvas -> image originale
                 x_orig = cx / scale
                 y_orig = cy / scale
 
                 st.session_state["overrides"][point_to_edit] = (x_orig, y_orig)
                 st.session_state["canvas_obj_count"] = len(objs)
-
                 st.success(f"✅ {point_to_edit} placé à ({x_orig:.0f}, {y_orig:.0f}) px")
 
-    # Afficher résumé des points corrigés
     if st.session_state["overrides"]:
         st.write("**Points corrigés :**")
         for k, (x, y) in st.session_state["overrides"].items():
@@ -242,7 +232,7 @@ with col_result:
 if not run:
     st.stop()
 
-with st.spinner("Détection de la posture (MediaPipe)..."):
+with st.spinner("Détection (MediaPipe) + calculs..."):
     img_rgb = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
     res = pose.process(img_rgb)
 
@@ -253,7 +243,6 @@ with st.spinner("Détection de la posture (MediaPipe)..."):
     lm = res.pose_landmarks.landmark
     L = mp_pose.PoseLandmark
 
-    # Points MediaPipe
     LS, _ = safe_point(lm, L.LEFT_SHOULDER, w, h)
     RS, _ = safe_point(lm, L.RIGHT_SHOULDER, w, h)
     LH, _ = safe_point(lm, L.LEFT_HIP, w, h)
@@ -273,36 +262,32 @@ with st.spinner("Détection de la posture (MediaPipe)..."):
         "Talon G": LHE, "Talon D": RHE,
     }
 
-    # Appliquer corrections (positions ABSOLUES)
+    # ✅ Appliquer corrections uniquement si la clé existe
     for k, (x, y) in st.session_state["overrides"].items():
         if k in POINTS:
             POINTS[k] = np.array([x, y], dtype=np.float32)
 
-    # Réassignation
     LS = POINTS["Epaule G"]; RS = POINTS["Epaule D"]
     LH = POINTS["Hanche G"]; RH = POINTS["Hanche D"]
     LK = POINTS["Genou G"];  RK = POINTS["Genou D"]
     LA = POINTS["Cheville G"]; RA = POINTS["Cheville D"]
     LHE = POINTS["Talon G"]; RHE = POINTS["Talon D"]
 
-    # Inclinaison épaules/bassin
-    raw_shoulder_angle = math.degrees(math.atan2(LS[1]-RS[1], LS[0]-RS[0]))
-    shoulder_angle = abs(raw_shoulder_angle)
+    raw_sh = math.degrees(math.atan2(LS[1]-RS[1], LS[0]-RS[0]))
+    shoulder_angle = abs(raw_sh)
     if shoulder_angle > 90:
         shoulder_angle = abs(shoulder_angle - 180)
 
-    raw_hip_angle = math.degrees(math.atan2(LH[1]-RH[1], LH[0]-RH[0]))
-    hip_angle = abs(raw_hip_angle)
+    raw_hip = math.degrees(math.atan2(LH[1]-RH[1], LH[0]-RH[0]))
+    hip_angle = abs(raw_hip)
     if hip_angle > 90:
         hip_angle = abs(hip_angle - 180)
 
-    # Angles
     knee_l = femur_tibia_knee_angle(LH, LK, LA)
     knee_r = femur_tibia_knee_angle(RH, RK, RA)
     ankle_l = tibia_rearfoot_ankle_angle(LK, LA, LHE)
     ankle_r = tibia_rearfoot_ankle_angle(RK, RA, RHE)
 
-    # Échelle mm/pixel
     px_height = max(LA[1], RA[1]) - min(LS[1], RS[1])
     mm_per_px = (float(taille_cm) * 10.0) / px_height if px_height > 0 else 0.0
     diff_shoulders_mm = abs(LS[1] - RS[1]) * mm_per_px
@@ -314,14 +299,13 @@ with st.spinner("Détection de la posture (MediaPipe)..."):
         shoulder_lower = "Droite" if shoulder_lower == "Gauche" else "Gauche"
         hip_lower = "Droite" if hip_lower == "Gauche" else "Gauche"
 
-    # Annotation
     annotated = img_np.copy()
 
-    for name, p in POINTS.items():
+    for _, p in POINTS.items():
         cv2.circle(annotated, tuple(p.astype(int)), 7, (0, 255, 0), -1)
 
-    # highlight corrigés
-    for name in st.session_state["overrides"].keys():
+    # ✅ highlight corrigés (sécure)
+    for name in list(st.session_state["overrides"].keys()):
         if name in POINTS:
             p = POINTS[name]
             cv2.circle(annotated, tuple(p.astype(int)), 14, (255, 0, 255), 3)
@@ -329,18 +313,9 @@ with st.spinner("Détection de la posture (MediaPipe)..."):
     cv2.line(annotated, tuple(LS.astype(int)), tuple(RS.astype(int)), (255, 0, 0), 3)
     cv2.line(annotated, tuple(LH.astype(int)), tuple(RH.astype(int)), (255, 0, 0), 3)
 
-    cv2.line(annotated, tuple(LH.astype(int)), tuple(LK.astype(int)), (0, 255, 255), 2)
-    cv2.line(annotated, tuple(LK.astype(int)), tuple(LA.astype(int)), (0, 255, 255), 2)
-    cv2.line(annotated, tuple(LA.astype(int)), tuple(LHE.astype(int)), (0, 255, 255), 2)
-
-    cv2.line(annotated, tuple(RH.astype(int)), tuple(RK.astype(int)), (0, 255, 255), 2)
-    cv2.line(annotated, tuple(RK.astype(int)), tuple(RA.astype(int)), (0, 255, 255), 2)
-    cv2.line(annotated, tuple(RA.astype(int)), tuple(RHE.astype(int)), (0, 255, 255), 2)
-
     cv2.putText(annotated, f"Vue: {vue}",
                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
 
-    # Résultats
     results = {
         "Nom": nom,
         "Vue (choisie)": vue,
@@ -356,7 +331,6 @@ with st.spinner("Détection de la posture (MediaPipe)..."):
         "Cheville D (tibia-arriere-pied)": f"{ankle_r:.1f} deg",
     }
 
-# ================= 8. SORTIE =================
 with col_result:
     st.subheader("📊 Résultats")
     st.table(results)
