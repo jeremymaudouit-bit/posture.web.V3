@@ -90,7 +90,7 @@ def pdf_safe(text) -> str:
            .replace("”", '"'))
     return s.encode("latin-1", errors="ignore").decode("latin-1")
 
-# ✅ PDF EN MÉMOIRE (bytes) — plus stable en Streamlit
+# ✅ PDF EN MÉMOIRE (bytes) — stable sur Streamlit Cloud/permissions
 def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
     pdf = FPDF()
     pdf.add_page()
@@ -149,7 +149,7 @@ def extract_origin_points_from_mediapipe(img_rgb_uint8: np.ndarray):
         p = lm[enum_.value]
         return (float(p.x * w), float(p.y * h))
 
-    # ✅ hanches ajoutées comme points "normaux"
+    # ✅ Hanches ajoutées comme points visibles/éditables (pas en "_" )
     return {
         "Genou G": pt_px(L.LEFT_KNEE),
         "Genou D": pt_px(L.RIGHT_KNEE),
@@ -207,7 +207,7 @@ with st.sidebar:
     st.subheader("🖱️ Correction avant analyse")
     enable_click_edit = st.checkbox("Activer correction par clic", value=True)
 
-    # ✅ hanches ajoutées
+    # ✅ Hanches ajoutées aux points modifiables
     editable_points = ["Hanche G", "Hanche D", "Genou G", "Genou D", "Cheville G", "Cheville D", "Talon G", "Talon D"]
     point_to_edit = st.selectbox("Point à corriger", editable_points, disabled=not enable_click_edit)
 
@@ -282,7 +282,8 @@ with col_input:
 # =========================
 with col_result:
     st.subheader("⚙️ Analyse")
-    run = st.button("▶ Lancer l'analyse", use_container_width=True)
+    # ⚠️ compat streamlit ancien: pas de use_container_width
+    run = st.button("▶ Lancer l'analyse")
 
 if not run:
     st.stop()
@@ -392,60 +393,22 @@ with col_result:
     st.subheader("📊 Résultats")
     st.table(results)
 
-st.subheader("🖼️ Image annotée")
-
-annotated = ensure_uint8_rgb(annotated)
-
-try:
-    # 1) méthode standard Streamlit (très fiable si shape/dtype OK)
+    st.subheader("🖼️ Image annotée")
+    # ⚠️ compat streamlit ancien: use_column_width (pas use_container_width)
+    # Et on passe par PIL (encore plus tolérant selon versions)
     st.image(
-        annotated,
-        channels="RGB",
+        Image.fromarray(annotated, mode="RGB"),
         caption="Points verts = utilisés | Violet = corrigé",
-        use_container_width=True
+        use_column_width=True
     )
-except Exception as e:
-    st.error("Impossible d'afficher l'image annotée via st.image (mode numpy). Fallback PNG.")
-    st.write("Erreur:", repr(e))
-    if annotated is not None:
-        st.write("Debug annotated:", {
-            "shape": getattr(annotated, "shape", None),
-            "dtype": str(getattr(annotated, "dtype", None)),
-            "min": int(np.min(annotated)) if hasattr(annotated, "size") and annotated.size else None,
-            "max": int(np.max(annotated)) if hasattr(annotated, "size") and annotated.size else None,
-            "contiguous": bool(getattr(annotated, "flags", {}).get("C_CONTIGUOUS", False)) if hasattr(annotated, "flags") else None,
-        })
-
-    # 2) fallback ultime : on encode en PNG bytes et on redonne à Streamlit
-    try:
-        ann_bgr = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
-        ok, buf = cv2.imencode(".png", ann_bgr)
-        if ok:
-            st.image(
-                buf.tobytes(),
-                caption="Points verts = utilisés | Violet = corrigé",
-                use_container_width=True
-            )
-        else:
-            st.error("Fallback PNG échoué (cv2.imencode a retourné False).")
-    except Exception as e2:
-        st.error("Fallback PNG a aussi échoué.")
-        st.write("Erreur fallback:", repr(e2))
-
-
-
 
     st.subheader("📄 PDF")
     pdf_bytes = generate_pdf(results, annotated)
     pdf_name = f"Bilan_{pdf_safe(results.get('Nom','Anonyme')).replace(' ', '_')}.pdf"
+    # ⚠️ compat streamlit ancien: pas de use_container_width sur download_button
     st.download_button(
         label="📥 Télécharger le Bilan PDF",
         data=pdf_bytes,
         file_name=pdf_name,
         mime="application/pdf",
-        use_container_width=True
     )
-
-
-
-
