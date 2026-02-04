@@ -256,7 +256,7 @@ def _safe_multicell(txt: str, w: float = 190, h: float = 6):
         # Fallback ultime : une ligne simple (tronquée)
         pdf.cell(w, h, t[:180], ln=1)
 
-    for o in obs:
+for o in obs:
     _safe_multicell(f"- {o}")
 
 
@@ -638,5 +638,6 @@ with col_result:
         file_name=pdf_name,
         mime="application/pdf",
     )
+
 
 
