@@ -219,6 +219,12 @@ def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
     pdf.cell(120, 9, pdf_safe("Indicateur"), 1, 0, 'L', True)
     pdf.cell(70, 9, pdf_safe("Valeur"), 1, 1, 'C', True)
 
+    out = pdf.output(dest="S")
+    if isinstance(out, (bytes, bytearray)):
+        return bytes(out)
+    return out.encode("latin-1")
+
+
     pdf.set_font("Arial", '', 11)
     for k, v in data.items():
         if k != "Nom":
@@ -638,6 +644,7 @@ with col_result:
         file_name=pdf_name,
         mime="application/pdf",
     )
+
 
 
 
