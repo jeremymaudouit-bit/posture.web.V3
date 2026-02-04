@@ -5,3 +5,6 @@ Pillow
 fpdf2==2.7.9
 mediapipe==0.10.9
 protobuf==3.20.3
+streamlit-drawable-canvas==0.9.3
+
+
