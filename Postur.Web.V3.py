@@ -9,6 +9,7 @@ from PIL import Image
 import math
 from fpdf import FPDF
 from datetime import datetime
+import io
 
 import mediapipe as mp
 from streamlit_image_coordinates import streamlit_image_coordinates
@@ -33,18 +34,36 @@ def load_pose():
 
 pose = load_pose()
 
-
 # =========================
 # 2) OUTILS
 # =========================
 def rotate_if_landscape(img_np_rgb: np.ndarray) -> np.ndarray:
-    # img_np_rgb: RGB uint8
     if img_np_rgb.shape[1] > img_np_rgb.shape[0]:
         img_np_rgb = cv2.rotate(img_np_rgb, cv2.ROTATE_90_CLOCKWISE)
     return img_np_rgb
 
+def ensure_uint8_rgb(img: np.ndarray) -> np.ndarray:
+    """Force image RGB uint8 contiguë."""
+    if img is None:
+        return None
+    if img.dtype != np.uint8:
+        img = img.astype(np.float32)
+        if img.max() <= 1.5:
+            img = img * 255.0
+        img = np.clip(img, 0, 255).astype(np.uint8)
+    if not img.flags["C_CONTIGUOUS"]:
+        img = np.ascontiguousarray(img)
+    return img
+
+def to_png_bytes(img_rgb_uint8: np.ndarray) -> bytes:
+    """Encode en PNG bytes (ultra robuste pour st.image)."""
+    img_rgb_uint8 = ensure_uint8_rgb(img_rgb_uint8)
+    pil = Image.fromarray(img_rgb_uint8, mode="RGB")
+    bio = io.BytesIO()
+    pil.save(bio, format="PNG")
+    return bio.getvalue()
+
 def calculate_angle(p1, p2, p3) -> float:
-    """Angle au point p2 entre segments p2->p1 et p2->p3."""
     v1 = np.array([p1[0]-p2[0], p1[1]-p2[1]], dtype=float)
     v2 = np.array([p3[0]-p2[0], p3[1]-p2[1]], dtype=float)
     dot = float(np.dot(v1, v2))
@@ -54,15 +73,12 @@ def calculate_angle(p1, p2, p3) -> float:
     return math.degrees(math.acos(np.clip(dot / mag, -1, 1)))
 
 def femur_tibia_knee_angle(hip, knee, ankle) -> float:
-    # Genou = Hanche–Genou–Cheville
     return calculate_angle(hip, knee, ankle)
 
 def tibia_rearfoot_ankle_angle(knee, ankle, heel) -> float:
-    # Cheville = Genou–Cheville–Talon
     return calculate_angle(knee, ankle, heel)
 
 def pdf_safe(text) -> str:
-    """Évite crash Unicode de fpdf."""
     if text is None:
         return ""
     s = str(text)
@@ -74,18 +90,16 @@ def pdf_safe(text) -> str:
            .replace("”", '"'))
     return s.encode("latin-1", errors="ignore").decode("latin-1")
 
-def generate_pdf(data: dict, img_rgb: np.ndarray) -> str:
+def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> str:
     pdf = FPDF()
     pdf.add_page()
 
-    # Header
     pdf.set_fill_color(31, 73, 125)
     pdf.rect(0, 0, 210, 40, 'F')
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Arial", 'B', 22)
     pdf.cell(0, 20, pdf_safe("BILAN POSTURAL IA"), ln=True, align="C")
 
-    # Infos
     pdf.set_text_color(0, 0, 0)
     pdf.set_font("Arial", 'B', 12)
     pdf.ln(25)
@@ -95,14 +109,12 @@ def generate_pdf(data: dict, img_rgb: np.ndarray) -> str:
     pdf.line(10, 68, 200, 68)
     pdf.ln(5)
 
-    # Image
-    img_pil = Image.fromarray(np.ascontiguousarray(img_rgb.astype(np.uint8)))
+    img_rgb_uint8 = ensure_uint8_rgb(img_rgb_uint8)
     tmp_img = os.path.join(tempfile.gettempdir(), "temp_analysis.png")
-    img_pil.save(tmp_img)
+    Image.fromarray(img_rgb_uint8, mode="RGB").save(tmp_img)
     pdf.image(tmp_img, x=55, w=100)
     pdf.ln(5)
 
-    # Tableau
     pdf.set_font("Arial", 'B', 12)
     pdf.set_fill_color(240, 240, 240)
     pdf.cell(120, 10, pdf_safe("Indicateur"), 1, 0, 'L', True)
@@ -114,7 +126,6 @@ def generate_pdf(data: dict, img_rgb: np.ndarray) -> str:
             pdf.cell(120, 9, " " + pdf_safe(k), 1, 0, 'L')
             pdf.cell(70, 9, " " + pdf_safe(v), 1, 1, 'C')
 
-    # Footer
     pdf.set_y(-20)
     pdf.set_font("Arial", 'I', 8)
     pdf.set_text_color(120, 120, 120)
@@ -127,18 +138,13 @@ def generate_pdf(data: dict, img_rgb: np.ndarray) -> str:
         os.remove(tmp_img)
     return filename
 
-def extract_origin_points_from_mediapipe(img_rgb: np.ndarray):
-    """
-    Renvoie un dict de points (pixels image originale) pour afficher en preview.
-    Renvoie {} si pas détecté.
-    """
-    res = pose.process(img_rgb)
+def extract_origin_points_from_mediapipe(img_rgb_uint8: np.ndarray):
+    res = pose.process(img_rgb_uint8)
     if not res.pose_landmarks:
         return {}
-
     lm = res.pose_landmarks.landmark
     L = mp_pose.PoseLandmark
-    h, w = img_rgb.shape[:2]
+    h, w = img_rgb_uint8.shape[:2]
 
     def pt_px(enum_):
         p = lm[enum_.value]
@@ -151,22 +157,17 @@ def extract_origin_points_from_mediapipe(img_rgb: np.ndarray):
         "Cheville D": pt_px(L.RIGHT_ANKLE),
         "Talon G": pt_px(L.LEFT_HEEL),
         "Talon D": pt_px(L.RIGHT_HEEL),
-        # bonus utiles internes
+
         "_Epaule G": pt_px(L.LEFT_SHOULDER),
         "_Epaule D": pt_px(L.RIGHT_SHOULDER),
         "_Hanche G": pt_px(L.LEFT_HIP),
         "_Hanche D": pt_px(L.RIGHT_HIP),
     }
 
-def draw_preview(img_disp_rgb: np.ndarray, origin_points: dict, override_one: dict, scale: float) -> np.ndarray:
-    """
-    Dessine sur image AFFICHÉE (disp), en utilisant origin_points/override en pixels ORIGINAUX.
-    scale = disp_w / w_orig
-    """
-    out = img_disp_rgb.copy()
+def draw_preview(img_disp_rgb_uint8: np.ndarray, origin_points: dict, override_one: dict, scale: float) -> np.ndarray:
+    out = img_disp_rgb_uint8.copy()
     out_bgr = cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
 
-    # points d'origine (verts)
     for name, p in origin_points.items():
         if name.startswith("_"):
             continue
@@ -174,7 +175,6 @@ def draw_preview(img_disp_rgb: np.ndarray, origin_points: dict, override_one: di
         y = int(p[1] * scale)
         cv2.circle(out_bgr, (x, y), 6, (0, 255, 0), -1)
 
-    # point corrigé (violet)
     for name, p in override_one.items():
         x = int(p[0] * scale)
         y = int(p[1] * scale)
@@ -185,16 +185,11 @@ def draw_preview(img_disp_rgb: np.ndarray, origin_points: dict, override_one: di
 
     return cv2.cvtColor(out_bgr, cv2.COLOR_BGR2RGB)
 
-def safe_pil(img_rgb: np.ndarray) -> Image.Image:
-    return Image.fromarray(np.ascontiguousarray(img_rgb.astype(np.uint8)))
-
-
 # =========================
 # 3) SESSION STATE
 # =========================
 if "override_one" not in st.session_state:
-    st.session_state["override_one"] = {}  # ex {"Cheville G": (x,y)}
-
+    st.session_state["override_one"] = {}  # {"Cheville G": (x,y)}
 
 # =========================
 # 4) UI
@@ -237,40 +232,34 @@ with col_input:
 if not image_data:
     st.stop()
 
-# Charger en RGB uint8
 if isinstance(image_data, Image.Image):
     img_np = np.array(image_data.convert("RGB"))
 else:
     img_np = np.array(Image.open(image_data).convert("RGB"))
 
 img_np = rotate_if_landscape(img_np)
+img_np = ensure_uint8_rgb(img_np)
 h, w = img_np.shape[:2]
 
-
 # =========================
-# 6) PREVIEW CLIQUABLE (avec points origine + modifiés)
+# 6) PREVIEW CLIQUABLE
 # =========================
 with col_input:
     st.subheader("📌 Cliquez pour placer le point sélectionné (avant analyse)")
-    st.caption("Points verts = MediaPipe d'origine | Violet = ton point corrigé.")
+    st.caption("Verts = points d'origine | Violet = point corrigé")
 
     disp_w = min(900, w)
     scale = disp_w / w
     disp_h = int(h * scale)
 
     img_disp = cv2.resize(img_np, (disp_w, disp_h), interpolation=cv2.INTER_AREA)
+    img_disp = ensure_uint8_rgb(img_disp)
 
     origin_points = extract_origin_points_from_mediapipe(img_np)
-
-    preview = draw_preview(
-        img_disp_rgb=img_disp,
-        origin_points=origin_points,
-        override_one=st.session_state["override_one"],
-        scale=scale
-    )
+    preview = draw_preview(img_disp, origin_points, st.session_state["override_one"], scale)
 
     coords = streamlit_image_coordinates(
-        safe_pil(preview),
+        Image.open(io.BytesIO(to_png_bytes(preview))),
         key="img_click",
     )
 
@@ -279,8 +268,6 @@ with col_input:
         cy = float(coords["y"])
         x_orig = cx / scale
         y_orig = cy / scale
-
-        # 1 seul point corrigé à la fois (celui choisi)
         st.session_state["override_one"][point_to_edit] = (x_orig, y_orig)
         st.success(f"✅ {point_to_edit} placé à ({x_orig:.0f}, {y_orig:.0f}) px")
 
@@ -288,7 +275,6 @@ with col_input:
         st.write("**Point corrigé enregistré :**")
         for k, (x, y) in st.session_state["override_one"].items():
             st.write(f"- {k} → ({x:.0f}, {y:.0f})")
-
 
 # =========================
 # 7) ANALYSE
@@ -303,7 +289,7 @@ if not run:
 with st.spinner("Détection (MediaPipe) + calculs..."):
     res = pose.process(img_np)
     if not res.pose_landmarks:
-        st.error("Aucune pose détectée. Essayez une photo plus nette, en pied, bien centrée.")
+        st.error("Aucune pose détectée. Photo plus nette, en pied, bien centrée.")
         st.stop()
 
     lm = res.pose_landmarks.landmark
@@ -313,7 +299,6 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
         p = lm[enum_.value]
         return np.array([p.x * w, p.y * h], dtype=np.float32)
 
-    # Points de base
     LS = pt(L.LEFT_SHOULDER)
     RS = pt(L.RIGHT_SHOULDER)
     LH = pt(L.LEFT_HIP)
@@ -333,7 +318,6 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
         "Talon G": LHE, "Talon D": RHE,
     }
 
-    # Appliquer correction (si existe)
     for k, (x, y) in st.session_state["override_one"].items():
         if k in POINTS:
             POINTS[k] = np.array([x, y], dtype=np.float32)
@@ -344,44 +328,36 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
     LA = POINTS["Cheville G"]; RA = POINTS["Cheville D"]
     LHE = POINTS["Talon G"]; RHE = POINTS["Talon D"]
 
-    # Inclinaison épaules
     raw_sh = math.degrees(math.atan2(LS[1]-RS[1], LS[0]-RS[0]))
     shoulder_angle = abs(raw_sh)
     if shoulder_angle > 90:
         shoulder_angle = abs(shoulder_angle - 180)
 
-    # Inclinaison bassin
     raw_hip = math.degrees(math.atan2(LH[1]-RH[1], LH[0]-RH[0]))
     hip_angle = abs(raw_hip)
     if hip_angle > 90:
         hip_angle = abs(hip_angle - 180)
 
-    # Angles demandés
     knee_l = femur_tibia_knee_angle(LH, LK, LA)
     knee_r = femur_tibia_knee_angle(RH, RK, RA)
     ankle_l = tibia_rearfoot_ankle_angle(LK, LA, LHE)
     ankle_r = tibia_rearfoot_ankle_angle(RK, RA, RHE)
 
-    # Echelle mm/pixel (approx)
     px_height = max(LA[1], RA[1]) - min(LS[1], RS[1])
     mm_per_px = (float(taille_cm) * 10.0) / px_height if px_height > 0 else 0.0
     diff_shoulders_mm = abs(LS[1] - RS[1]) * mm_per_px
     diff_hips_mm = abs(LH[1] - RH[1]) * mm_per_px
 
-    # côté le plus bas (y plus grand = plus bas)
     shoulder_lower = "Gauche" if LS[1] > RS[1] else "Droite"
     hip_lower = "Gauche" if LH[1] > RH[1] else "Droite"
-
-    # inversion si dos
     if vue == "Dos":
         shoulder_lower = "Droite" if shoulder_lower == "Gauche" else "Gauche"
         hip_lower = "Droite" if hip_lower == "Gauche" else "Gauche"
 
-    # Annotation image (RGB)
-    annotated = img_np.copy()
-    ann_bgr = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
+    # Annotated image
+    ann_bgr = cv2.cvtColor(img_np.copy(), cv2.COLOR_RGB2BGR)
 
-    for name, p in POINTS.items():
+    for _, p in POINTS.items():
         cv2.circle(ann_bgr, tuple(p.astype(int)), 7, (0, 255, 0), -1)
 
     for name in list(st.session_state["override_one"].keys()):
@@ -397,6 +373,7 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
     annotated = cv2.cvtColor(ann_bgr, cv2.COLOR_BGR2RGB)
+    annotated = ensure_uint8_rgb(annotated)
 
     results = {
         "Nom": nom,
@@ -421,7 +398,7 @@ with col_result:
     st.table(results)
 
     st.subheader("🖼️ Image annotée")
-    st.image(safe_pil(annotated), caption="Points verts = utilisés | Violet = corrigé", use_container_width=True)
+    st.image(to_png_bytes(annotated), caption="Points verts = utilisés | Violet = corrigé", use_container_width=True)
 
     st.subheader("📄 PDF")
     pdf_path = generate_pdf(results, annotated)
