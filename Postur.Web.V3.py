@@ -1,234 +1,295 @@
+# ==============================
+# IMPORTS
+# ==============================
 import streamlit as st
-import numpy as np
-import cv2
-from PIL import Image
-import math
-from fpdf import FPDF
-from datetime import datetime
 import tensorflow as tf
 import tensorflow_hub as hub
-import os
+import cv2, os, tempfile
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime
+from scipy.signal import butter, filtfilt, find_peaks
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Image as PDFImage,
+    Spacer, Table, TableStyle
+)
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.lib import colors
 
-# ================= 1. CONFIG STREAMLIT =================
-st.set_page_config(page_title="Analyseur Postural Pro", layout="wide")
+# ==============================
+# CONFIG
+# ==============================
+st.set_page_config("GaitScan Pro", layout="wide")
+st.title("🏃 GaitScan Pro – Analyse Cinématique")
+FPS = 30
 
-# ================= 2. CHARGEMENT MOVENET =================
+# ==============================
+# MOVENET
+# ==============================
 @st.cache_resource
 def load_movenet():
-    model = hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
-    return model
+    return hub.load("https://tfhub.dev/google/movenet/singlepose/lightning/4")
 
 movenet = load_movenet()
 
-# ================= 3. OUTILS TECHNIQUES =================
-def preprocess(image):
-    image = tf.image.resize_with_pad(image, 192, 192)
-    image = tf.expand_dims(image, axis=0)
-    return tf.cast(image, dtype=tf.int32)
+def detect_pose(frame):
+    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    img = tf.image.resize_with_pad(img[None], 192, 192)
+    out = movenet.signatures["serving_default"](tf.cast(img, tf.int32))
+    return out["output_0"].numpy()[0, 0]
 
-def calculate_angle(p1, p2, p3):
-    v1 = np.array([p1[0]-p2[0], p1[1]-p2[1]])
-    v2 = np.array([p3[0]-p2[0], p3[1]-p2[1]])
-    dot = np.dot(v1, v2)
-    mag = np.linalg.norm(v1) * np.linalg.norm(v2)
-    if mag == 0: return 0
-    return math.degrees(math.acos(np.clip(dot / mag, -1, 1)))
+# ==============================
+# JOINTS
+# ==============================
+J = {
+    "Epaule G":5, "Epaule D":6,
+    "Hanche G":11, "Hanche D":12,
+    "Genou G":13, "Genou D":14,
+    "Cheville G":15, "Cheville D":16
+}
 
-def tibia_vertical_angle(knee, ankle):
-    v = np.array([ankle[0]-knee[0], ankle[1]-knee[1]])
-    vertical = np.array([0, 1])
-    dot = np.dot(v, vertical)
-    mag = np.linalg.norm(v)
-    if mag == 0: return 0
-    return math.degrees(math.acos(np.clip(dot / mag, -1, 1)))
+def angle(a,b,c,joint_type="Genou"):
+    """
+    Calcule l'angle en degrés au point b formé par les points a-b-c.
+    Correction intégrée pour avoir :
+    - Genou : 180° jambe étendue
+    - Hanche : 180° jambe alignée
+    - Cheville : 90° jambe droite
+    """
+    # Inversion axe Y pour correspondre au repère classique
+    a_, b_, c_ = a.copy(), b.copy(), c.copy()
+    a_[1], b_[1], c_[1] = -a_[1], -b_[1], -c_[1]
 
-def detect_front_or_back(kps, visibility_threshold=0.2):
-    """Détecte si la personne est de face ou de dos"""
-    face_points = [0, 1, 2, 3, 4]  # Nez, yeux, oreilles
-    visible = sum(kps[i][2] > visibility_threshold for i in face_points)
-    return "Face" if visible >= 2 else "Dos"
+    ba, bc = a_ - b_, c_ - b_
+    ang = np.degrees(
+        np.arccos(
+            np.clip(np.dot(ba, bc)/(np.linalg.norm(ba)*np.linalg.norm(bc)+1e-6), -1, 1)
+        )
+    )
 
-def generate_pdf(data, img_np):
-    pdf = FPDF()
-    pdf.add_page()
-    
-    # Design de l'en-tête
-    pdf.set_fill_color(31, 73, 125) 
-    pdf.rect(0, 0, 210, 40, 'F')
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Arial", 'B', 24)
-    pdf.cell(0, 20, "BILAN POSTURAL IA", ln=True, align="C")
-    
-    # Infos Patient
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font("Arial", 'B', 12)
-    pdf.ln(25)
-    pdf.cell(100, 10, f"Patient : {data['Nom']}", ln=0)
-    pdf.set_font("Arial", '', 11)
-    pdf.cell(90, 10, f"Date : {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=1, align="R")
-    pdf.line(10, 68, 200, 68)
-    pdf.ln(5)
+    # Ajustement selon le type d'articulation
+    if joint_type == "Genou":
+        return 180 - ang   # 180° jambe étendue
+    elif joint_type == "Hanche":
+        return 180 - ang   # 180° jambe alignée
+    elif joint_type == "Cheville":
+        return 90 - (ang - 90)  # 90° jambe droite
+    else:
+        return ang
 
-    # Sauvegarde et insertion de l'image
-    img_pil = Image.fromarray(img_np)
-    img_path = "temp_analysis.png"
-    img_pil.save(img_path)
-    pdf.image(img_path, x=60, w=90)
-    pdf.ln(5)
+# ==============================
+# BANDPASS
+# ==============================
+def bandpass(sig, level, fs=FPS):
+    low = 0.3 + level*0.02
+    high = max(6.0 - level*0.25, low+0.4)
+    b,a = butter(2, [low/(fs/2), high/(fs/2)], btype="band")
+    return filtfilt(b,a,sig)
 
-    # Tableau des résultats
-    pdf.set_font("Arial", 'B', 12)
-    pdf.set_fill_color(240, 240, 240)
-    pdf.cell(110, 10, "Indicateur de Mesure", 1, 0, 'L', True)
-    pdf.cell(80, 10, "Valeur", 1, 1, 'C', True)
-    
-    pdf.set_font("Arial", '', 11)
-    for k, v in data.items():
-        if k != "Nom":
-            pdf.cell(110, 9, f" {k}", 1, 0, 'L')
-            pdf.cell(80, 9, f" {v}", 1, 1, 'C')
+# ==============================
+# VIDEO PROCESS
+# ==============================
+def process_video(path):
+    cap = cv2.VideoCapture(path)
 
-    # Footer
-    pdf.set_y(-25)
-    pdf.set_font("Arial", 'I', 8)
-    pdf.set_text_color(120, 120, 120)
-    pdf.cell(0, 10, "Document généré par Analyseur Postural Pro - Usage indicatif uniquement.", align="C")
+    res = {
+        "Hanche G":[], "Hanche D":[],
+        "Genou G":[], "Genou D":[],
+        "Cheville G":[], "Cheville D":[],
+        "Pelvis":[], "Dos":[]
+    }
+    heel_y_D, frames = [], []
 
-    filename = f"Bilan_{data['Nom'].replace(' ', '_')}.pdf"
-    pdf.output(filename)
-    return filename
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret: break
+        kp = detect_pose(frame)
+        frames.append(frame.copy())
 
-# ================= 4. INTERFACE UTILISATEUR =================
-st.title("🧍 Analyseur Postural Pro")
-st.markdown("---")
+        # ANGLES
+        res["Hanche G"].append(angle(kp[J["Epaule G"],:2], kp[J["Hanche G"],:2], kp[J["Genou G"],:2],"Hanche"))
+        res["Hanche D"].append(angle(kp[J["Epaule D"],:2], kp[J["Hanche D"],:2], kp[J["Genou D"],:2],"Hanche"))
 
+        res["Genou G"].append(angle(kp[J["Hanche G"],:2], kp[J["Genou G"],:2], kp[J["Cheville G"],:2],"Genou"))
+        res["Genou D"].append(angle(kp[J["Hanche D"],:2], kp[J["Genou D"],:2], kp[J["Cheville D"],:2],"Genou"))
+
+        res["Cheville G"].append(angle(kp[J["Genou G"],:2], kp[J["Cheville G"],:2], kp[J["Cheville G"],:2]+[0,1],"Cheville"))
+        res["Cheville D"].append(angle(kp[J["Genou D"],:2], kp[J["Cheville D"],:2], kp[J["Cheville D"],:2]+[0,1],"Cheville"))
+
+        pelvis = kp[J["Hanche D"],:2] - kp[J["Hanche G"],:2]
+        res["Pelvis"].append(np.degrees(np.arctan2(pelvis[1], pelvis[0])))
+
+        mid_hip = (kp[11,:2]+kp[12,:2])/2
+        mid_sh = (kp[5,:2]+kp[6,:2])/2
+        res["Dos"].append(angle(mid_sh, mid_hip, mid_hip+[0,-1]))
+
+        heel_y_D.append(kp[J["Cheville D"],1])
+
+    cap.release()
+    return res, heel_y_D, frames
+
+# ==============================
+# CYCLE DETECTION
+# ==============================
+def detect_cycle(heel_y):
+    inv = -np.array(heel_y)
+    peaks,_ = find_peaks(inv, distance=FPS//2, prominence=np.std(inv)*0.3)
+    if len(peaks)>=2:
+        return peaks[0], peaks[1]
+    return 0, len(heel_y)-1
+
+# ==============================
+# NORMES
+# ==============================
+def norm_curve(joint,n):
+    x = np.linspace(0,100,n)
+    if joint=="Genou":
+        return np.interp(x,[0,15,40,60,80,100],[180,170,180,140,120,180])
+    if joint=="Hanche":
+        return np.interp(x,[0,30,60,100],[180,160,150,180])
+    if joint=="Cheville":
+        return np.interp(x,[0,10,50,70,100],[90,85,100,75,90])
+    return np.zeros(n)
+
+# ==============================
+# PDF EXPORT
+# ==============================
+def export_pdf(patient, keyframe, figures, table_data):
+    path = os.path.join(tempfile.gettempdir(), "rapport_gaitscan.pdf")
+    doc = SimpleDocTemplate(
+        path, pagesize=A4, rightMargin=2*cm,
+        leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm
+    )
+
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("<b>GaitScan Pro – Analyse Cinématique</b>", styles["Title"]))
+    story.append(Spacer(1,0.3*cm))
+    story.append(Paragraph(
+        f"<b>Patient :</b> {patient['nom']} {patient['prenom']}<br/>"
+        f"<b>Date :</b> {datetime.now().strftime('%d/%m/%Y')}<br/>"
+        f"<b>Caméra :</b> {patient.get('camera','N/A')}", styles["Normal"]
+    ))
+    story.append(Paragraph(
+        f"<b>Phase du pas basée sur :</b> {patient.get('phase_cote','N/A')}", styles["Normal"]
+    ))
+    story.append(Spacer(1,0.5*cm))
+
+    story.append(Paragraph("<b>Image représentative du cycle</b>", styles["Heading2"]))
+    story.append(PDFImage(keyframe, width=16*cm, height=8*cm))
+    story.append(Spacer(1,0.6*cm))
+
+    story.append(Paragraph("<b>Analyse articulaire</b>", styles["Heading2"]))
+    story.append(Spacer(1,0.3*cm))
+    for joint, img_path in figures.items():
+        story.append(Paragraph(f"<b>{joint}</b>", styles["Heading3"]))
+        story.append(PDFImage(img_path, width=16*cm, height=6*cm))
+        story.append(Spacer(1,0.4*cm))
+
+    story.append(Spacer(1,0.5*cm))
+    story.append(Paragraph("<b>Synthèse des angles (°) – Gauche / Droite</b>", styles["Heading2"]))
+    table = Table([["Articulation","Min","Moyenne","Max"]]+table_data,
+                  colWidths=[5*cm,3*cm,3*cm,3*cm])
+    table.setStyle(TableStyle([
+        ("GRID",(0,0),(-1,-1),1,colors.black),
+        ("BACKGROUND",(0,0),(-1,0),colors.lightgrey),
+        ("ALIGN",(1,1),(-1,-1),"CENTER")
+    ]))
+    story.append(table)
+    doc.build(story)
+    return path
+
+# ==============================
+# STREAMLIT INTERFACE
+# ==============================
 with st.sidebar:
-    st.header("👤 Dossier Patient")
-    nom = st.text_input("Nom complet", value="Anonyme")
-    taille_cm = st.number_input("Taille (cm)", min_value=100, max_value=220, value=170)
-    st.divider()
-    source = st.radio("Source de l'image", ["📷 Caméra", "📁 Téléverser une photo"])
+    nom = st.text_input("Nom","DURAND")
+    prenom = st.text_input("Prénom","Jean")
+    smooth = st.slider("Lissage band-pass",0,10,3)
+    src = st.radio("Source",["Vidéo","Caméra"])
+    camera_pos = st.selectbox("Position de la caméra", ["Devant", "Droite", "Gauche"])
+    phase_cote = st.selectbox("Phase du pas basée sur :", ["Droite", "Gauche", "Les deux"])
 
-col_input, col_result = st.columns([1, 1])
+video = st.file_uploader("Vidéo",["mp4","avi","mov"]) if src=="Vidéo" else st.camera_input("Caméra")
 
-image_data = None
-with col_input:
-    if source == "📷 Caméra":
-        st.write("La caméra par défaut du navigateur sera utilisée.")
-        image_data = st.camera_input("Capturez la posture de face")
-    else:
-        image_data = st.file_uploader("Format JPG/PNG", type=["jpg", "png", "jpeg"])
+# ==============================
+# ANALYSE
+# ==============================
+if video and st.button("▶ Lancer l'analyse"):
+    tmp = tempfile.NamedTemporaryFile(delete=False)
+    tmp.write(video.read())
+    tmp.close()
 
-# ================= 5. COEUR DE L'ANALYSE =================
-if image_data:
-    if isinstance(image_data, Image.Image):
-        img = image_data.convert('RGB')
-        img_np = np.array(img)
-    else:
-        img = Image.open(image_data).convert('RGB')
-        img_np = np.array(img)
+    data, heel_y, frames = process_video(tmp.name)
+    os.unlink(tmp.name)
 
-    # Correction d'orientation automatique
-    if img_np.shape[1] > img_np.shape[0]:
-        img_np = cv2.rotate(img_np, cv2.ROTATE_90_CLOCKWISE)
+    # Détecter la phase selon le côté choisi
+    if phase_cote == "Droite":
+        heel_f_ref = bandpass(np.array(data["Cheville D"]), smooth)
+        c0, c1 = detect_cycle(heel_f_ref)
+        phase_colors = [(c0, c1, "blue")]
+    elif phase_cote == "Gauche":
+        heel_f_ref = bandpass(np.array(data["Cheville G"]), smooth)
+        c0, c1 = detect_cycle(heel_f_ref)
+        phase_colors = [(c0, c1, "orange")]
+    else:  # Les deux
+        heel_f_D = bandpass(np.array(data["Cheville D"]), smooth)
+        heel_f_G = bandpass(np.array(data["Cheville G"]), smooth)
+        c0_D, c1_D = detect_cycle(heel_f_D)
+        c0_G, c1_G = detect_cycle(heel_f_G)
+        phase_colors = [(c0_D, c1_D, "blue"), (c0_G, c1_G, "orange")]
 
-    h, w, _ = img_np.shape
+    key_img = os.path.join(tempfile.gettempdir(),"keyframe.png")
+    cv2.imwrite(key_img, frames[len(frames)//2])
 
-    if st.button("⚙️ LANCER L'ANALYSE BIOMÉCANIQUE", use_container_width=True):
-        with st.spinner("L'IA détecte les points anatomiques..."):
-            # Inférence MoveNet
-            input_img = preprocess(img_np)
-            outputs = movenet.signatures['serving_default'](input_img)
-            kps = outputs['output_0'][0][0].numpy()
+    figs, table_data = {}, []
 
-            def pt(i):
-                y, x, s = kps[i]
-                return np.array([x*w, y*h])
+    for joint in ["Hanche","Genou","Cheville"]:
+        fig,(ax1,ax2) = plt.subplots(1,2,figsize=(12,4),gridspec_kw={"width_ratios":[2,1]})
+        g = bandpass(np.array(data[f"{joint} G"]), smooth)
+        d = bandpass(np.array(data[f"{joint} D"]), smooth)
+        n = norm_curve(joint,len(g))
 
-            # Détection Face/Dos
-            view = detect_front_or_back(kps)
-            st.write(f"Vue détectée : {view}")
+        ax1.plot(g,label="Gauche",color="red")
+        ax1.plot(d,label="Droite",color="blue")
+        for c0, c1, color in phase_colors:
+            ax1.axvspan(c0, c1, color=color, alpha=0.3)
+        ax1.set_title(f"{joint} – Analyse")
+        ax1.legend()
 
-            # Points clés
-            LS, RS = pt(5), pt(6)   # Épaules
-            LH, RH = pt(11), pt(12) # Bassin
-            LK, RK = pt(13), pt(14) # Genoux
-            LA, RA = pt(15), pt(16) # Chevilles
+        ax2.plot(n,color="green")
+        ax2.set_title("Norme")
 
-            # --- Calcul des angles ---
-            raw_shoulder_angle = math.degrees(math.atan2(LS[1]-RS[1], LS[0]-RS[0]))
-            shoulder_angle = abs(raw_shoulder_angle)
-            if shoulder_angle > 90: shoulder_angle = abs(shoulder_angle - 180)
+        st.pyplot(fig)
+        img = os.path.join(tempfile.gettempdir(),f"{joint}.png")
+        fig.savefig(img,bbox_inches="tight")
+        plt.close(fig)
+        figs[joint]=img
 
-            raw_hip_angle = math.degrees(math.atan2(LH[1]-RH[1], LH[0]-RH[0]))
-            hip_angle = abs(raw_hip_angle)
-            if hip_angle > 90: hip_angle = abs(raw_hip_angle - 180)
+        # Tableau détaillé par côté
+        table_data.append([joint+" Gauche", f"{g.min():.1f}", f"{g.mean():.1f}", f"{g.max():.1f}"])
+        table_data.append([joint+" Droite", f"{d.min():.1f}", f"{d.mean():.1f}", f"{d.max():.1f}"])
 
-            knee_l = calculate_angle(LH, LK, LA)
-            knee_r = calculate_angle(RH, RK, RA)
-            ankle_l = tibia_vertical_angle(LK, LA)
-            ankle_r = tibia_vertical_angle(RK, RA)
+    # PDF
+    pdf_path = export_pdf(
+        patient={
+            "nom": nom,
+            "prenom": prenom,
+            "camera": camera_pos,
+            "phase_cote": phase_cote
+        },
+        keyframe=key_img,
+        figures=figs,
+        table_data=table_data
+    )
 
-            px_height = max(LA[1], RA[1]) - min(LS[1], RS[1])
-            mm_per_px = (taille_cm * 10) / px_height if px_height > 0 else 0
-            diff_shoulders_mm = abs(LS[1]-RS[1]) * mm_per_px
-            diff_hips_mm = abs(LH[1]-RH[1]) * mm_per_px
-
-            # Déterminer quel côté est le plus bas
-            shoulder_lower = "Gauche" if LS[1] > RS[1] else "Droite"
-            hip_lower = "Gauche" if LH[1] > RH[1] else "Droite"
-
-            # Inverser si dos
-            if view == "Dos":
-                shoulder_lower = "Droite" if shoulder_lower == "Gauche" else "Gauche"
-                hip_lower = "Droite" if hip_lower == "Gauche" else "Gauche"
-
-            # Annotation visuelle
-            annotated = img_np.copy()
-            points_list = [LS, RS, LH, RH, LK, RK, LA, RA]
-            for p in points_list:
-                cv2.circle(annotated, tuple(p.astype(int)), 8, (0, 255, 0), -1)
-            cv2.line(annotated, tuple(LS.astype(int)), tuple(RS.astype(int)), (255, 0, 0), 3)
-            cv2.line(annotated, tuple(LH.astype(int)), tuple(RH.astype(int)), (255, 0, 0), 3)
-
-            # Ajouter texte sur l'image
-            cv2.putText(annotated, f"Epaules: {shoulder_lower} plus basse",
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.putText(annotated, f"Bassin: {hip_lower} plus bas",
-                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            cv2.putText(annotated, f"Vue détectée : {view}",
-                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
-            # Résultats à afficher
-            results = {
-                "Nom": nom,
-                "Vue": view,
-                "Inclinaison Épaules (Horizon = 0°)": f"{shoulder_angle:.1f}°",
-                "Épaule la plus basse": shoulder_lower,
-                "Inclinaison Bassin (Horizon = 0°)": f"{hip_angle:.1f}°",
-                "Bassin le plus bas": hip_lower,
-                "Dénivelé Épaules (mm)": f"{diff_shoulders_mm:.1f} mm",
-                "Dénivelé Bassin (mm)": f"{diff_hips_mm:.1f} mm",
-                "Angle Genou Gauche": f"{knee_l:.1f}°",
-                "Angle Genou Droit": f"{knee_r:.1f}°",
-                "Inclinaison Tibia G / Verticale": f"{ankle_l:.1f}°",
-                "Inclinaison Tibia D / Verticale": f"{ankle_r:.1f}°"
-            }
-
-            with col_result:
-                st.subheader("Résultats de l'analyse")
-                st.image(annotated, use_container_width=True)
-                st.table(results)
-
-                pdf_path = generate_pdf(results, annotated)
-                with open(pdf_path, "rb") as f:
-                    st.download_button(
-                        label="📥 Télécharger le Bilan PDF",
-                        data=f,
-                        file_name=pdf_path,
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-                # Nettoyage fichier temporaire
-                if os.path.exists("temp_analysis.png"):
-                    os.remove("temp_analysis.png")
+    with open(pdf_path, "rb") as f:
+        st.download_button(
+            "📄 Télécharger le rapport PDF",
+            f,
+            file_name=f"GaitScan_{nom}_{prenom}.pdf",
+            mime="application/pdf"
+        )
