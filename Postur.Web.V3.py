@@ -56,7 +56,7 @@ def ensure_uint8_rgb(img: np.ndarray) -> np.ndarray:
     return img
 
 def to_png_bytes(img_rgb_uint8: np.ndarray) -> bytes:
-    """Encode en PNG bytes (robuste)."""
+    """Encode en PNG bytes (ultra robuste)."""
     img_rgb_uint8 = ensure_uint8_rgb(img_rgb_uint8)
     pil = Image.fromarray(img_rgb_uint8, mode="RGB")
     bio = io.BytesIO()
@@ -91,10 +91,7 @@ def pdf_safe(text) -> str:
     return s.encode("latin-1", errors="ignore").decode("latin-1")
 
 def crop_to_landmarks(img_rgb_uint8: np.ndarray, res_pose, pad_ratio: float = 0.18) -> np.ndarray:
-    """
-    Cadrage auto autour du corps à partir des landmarks MediaPipe.
-    pad_ratio = marge relative autour de la bbox.
-    """
+    """Cadrage auto autour du corps à partir des landmarks MediaPipe."""
     if res_pose is None or not res_pose.pose_landmarks:
         return img_rgb_uint8
 
@@ -127,8 +124,49 @@ def crop_to_landmarks(img_rgb_uint8: np.ndarray, res_pose, pad_ratio: float = 0.
 
     return img_rgb_uint8[y1:y2, x1:x2].copy()
 
+def _to_float(val):
+    if val is None:
+        return None
+    s = str(val).replace(",", ".")
+    num = ""
+    for ch in s:
+        if ch.isdigit() or ch in ".-":
+            num += ch
+        elif num:
+            break
+    try:
+        return float(num)
+    except:
+        return None
+
+def _badge(status: str):
+    if status == "OK":
+        return "🟢 OK"
+    if status == "SURV":
+        return "🟠 À surveiller"
+    return "🔴 À corriger"
+
+def _status_from_mm(mm: float):
+    if mm is None:
+        return "SURV"
+    if mm < 5:
+        return "OK"
+    if mm < 10:
+        return "SURV"
+    return "ALERTE"
+
+def _status_from_deg(deg: float):
+    if deg is None:
+        return "SURV"
+    if deg < 2:
+        return "OK"
+    if deg < 5:
+        return "SURV"
+    return "ALERTE"
+
 # =========================
 # PDF PRO (EN MÉMOIRE + COMPAT FPDF)
+# =========================
 def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
     pdf = FPDF()
     pdf.add_page()
@@ -162,42 +200,17 @@ def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
     pdf.image(tmp_img, x=45, w=120)
     pdf.ln(3)
 
-    # Section synthèse
-    def _num(s):
-        try:
-            ss = str(s).replace(",", ".")
-            num = ""
-            for ch in ss:
-                if ch.isdigit() or ch in ".-":
-                    num += ch
-                elif num:
-                    break
-            return float(num)
-        except:
-            return None
-
-    sh_mm = _num(data.get("Dénivelé Épaules (mm)"))
-    hip_mm = _num(data.get("Dénivelé Bassin (mm)"))
-    sh_deg = _num(data.get("Inclinaison Épaules (0=horizon)"))
-    hip_deg = _num(data.get("Inclinaison Bassin (0=horizon)"))
-
-    def _flag_mm(v):
-        if v is None: return "A SURV"
-        if v < 5: return "OK"
-        if v < 10: return "A SURV"
-        return "ALERTE"
-
-    def _flag_deg(v):
-        if v is None: return "A SURV"
-        if v < 2: return "OK"
-        if v < 5: return "A SURV"
-        return "ALERTE"
+    # Synthèse
+    sh_mm = _to_float(data.get("Dénivelé Épaules (mm)"))
+    hip_mm = _to_float(data.get("Dénivelé Bassin (mm)"))
+    sh_deg = _to_float(data.get("Inclinaison Épaules (0=horizon)"))
+    hip_deg = _to_float(data.get("Inclinaison Bassin (0=horizon)"))
 
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(0, 7, pdf_safe("Synthèse"), ln=1)
     pdf.set_font("Arial", '', 11)
-    pdf.cell(0, 6, pdf_safe(f"- Épaules : {data.get('Dénivelé Épaules (mm)','—')} / {data.get('Inclinaison Épaules (0=horizon)','—')}  [{_flag_mm(sh_mm)}]"), ln=1)
-    pdf.cell(0, 6, pdf_safe(f"- Bassin  : {data.get('Dénivelé Bassin (mm)','—')} / {data.get('Inclinaison Bassin (0=horizon)','—')}  [{_flag_mm(hip_mm)}]"), ln=1)
+    pdf.cell(0, 6, pdf_safe(f"- Épaules : {data.get('Dénivelé Épaules (mm)','—')} / {data.get('Inclinaison Épaules (0=horizon)','—')}  [{_status_from_mm(sh_mm)}]"), ln=1)
+    pdf.cell(0, 6, pdf_safe(f"- Bassin  : {data.get('Dénivelé Bassin (mm)','—')} / {data.get('Inclinaison Bassin (0=horizon)','—')}  [{_status_from_mm(hip_mm)}]"), ln=1)
     pdf.ln(2)
 
     # Tableau indicateurs
@@ -219,16 +232,16 @@ def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
     pdf.set_font("Arial", '', 11)
 
     obs = []
-    if _flag_mm(sh_mm) == "ALERTE" or _flag_deg(sh_deg) == "ALERTE":
+    if _status_from_mm(sh_mm) == "ALERTE" or _status_from_deg(sh_deg) == "ALERTE":
         obs.append("Épaules : asymétrie marquée (contrôle clinique recommandé).")
-    elif _flag_mm(sh_mm) == "A SURV" or _flag_deg(sh_deg) == "A SURV":
+    elif _status_from_mm(sh_mm) == "SURV" or _status_from_deg(sh_deg) == "SURV":
         obs.append("Épaules : légère asymétrie (à surveiller).")
     else:
         obs.append("Épaules : alignement satisfaisant.")
 
-    if _flag_mm(hip_mm) == "ALERTE" or _flag_deg(hip_deg) == "ALERTE":
+    if _status_from_mm(hip_mm) == "ALERTE" or _status_from_deg(hip_deg) == "ALERTE":
         obs.append("Bassin : bascule marquée (contrôle clinique recommandé).")
-    elif _flag_mm(hip_mm) == "A SURV" or _flag_deg(hip_deg) == "A SURV":
+    elif _status_from_mm(hip_mm) == "SURV" or _status_from_deg(hip_deg) == "SURV":
         obs.append("Bassin : légère bascule (à surveiller).")
     else:
         obs.append("Bassin : alignement satisfaisant.")
@@ -250,6 +263,35 @@ def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
         return bytes(out)
     return out.encode("latin-1")
 
+# =========================
+# POINTS ORIGINE + PREVIEW
+# =========================
+def extract_origin_points_from_mediapipe(img_rgb_uint8: np.ndarray):
+    res = pose.process(img_rgb_uint8)
+    if not res.pose_landmarks:
+        return {}
+    lm = res.pose_landmarks.landmark
+    L = mp_pose.PoseLandmark
+    h, w = img_rgb_uint8.shape[:2]
+
+    def pt_px(enum_):
+        p = lm[enum_.value]
+        return (float(p.x * w), float(p.y * h))
+
+    return {
+        "Genou G": pt_px(L.LEFT_KNEE),
+        "Genou D": pt_px(L.RIGHT_KNEE),
+        "Cheville G": pt_px(L.LEFT_ANKLE),
+        "Cheville D": pt_px(L.RIGHT_ANKLE),
+        "Talon G": pt_px(L.LEFT_HEEL),
+        "Talon D": pt_px(L.RIGHT_HEEL),
+
+        "Hanche G": pt_px(L.LEFT_HIP),
+        "Hanche D": pt_px(L.RIGHT_HIP),
+
+        "_Epaule G": pt_px(L.LEFT_SHOULDER),
+        "_Epaule D": pt_px(L.RIGHT_SHOULDER),
+    }
 
 def draw_preview(img_disp_rgb_uint8: np.ndarray, origin_points: dict, override_one: dict, scale: float) -> np.ndarray:
     out = img_disp_rgb_uint8.copy()
@@ -293,7 +335,6 @@ with st.sidebar:
     st.subheader("🖱️ Correction avant analyse")
     enable_click_edit = st.checkbox("Activer correction par clic", value=True)
 
-    # ✅ Ajout des hanches
     editable_points = ["Hanche G", "Hanche D", "Genou G", "Genou D", "Cheville G", "Cheville D", "Talon G", "Talon D"]
     point_to_edit = st.selectbox("Point à corriger", editable_points, disabled=not enable_click_edit)
 
@@ -332,7 +373,7 @@ else:
 img_np = rotate_if_landscape(img_np)
 img_np = ensure_uint8_rgb(img_np)
 
-# (option) recadrage auto basé sur landmarks
+# Cadrage auto (optionnel) sans casser le reste
 res_for_crop = pose.process(img_np)
 if auto_crop:
     img_np = crop_to_landmarks(img_np, res_for_crop, pad_ratio=0.18)
@@ -341,7 +382,7 @@ if auto_crop:
 h, w = img_np.shape[:2]
 
 # =========================
-# 6) PREVIEW CLIQUABLE (UNE SEULE IMAGE)
+# 6) PREVIEW CLIQUABLE
 # =========================
 with col_input:
     st.subheader("📌 Cliquez pour placer le point sélectionné (avant analyse)")
@@ -357,7 +398,7 @@ with col_input:
     origin_points = extract_origin_points_from_mediapipe(img_np)
     preview = draw_preview(img_disp, origin_points, st.session_state["override_one"], scale)
 
-    # ⚠️ streamlit_image_coordinates affiche déjà l'image → pas de st.image() ici
+    # IMPORTANT: streamlit_image_coordinates affiche déjà l'image => pas de st.image() sinon doublon
     coords = streamlit_image_coordinates(
         Image.open(io.BytesIO(to_png_bytes(preview))),
         key="img_click",
@@ -418,7 +459,7 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
         "Talon G": LHE, "Talon D": RHE,
     }
 
-    # overrides (clics)
+    # overrides
     for k, (x, y) in st.session_state["override_one"].items():
         if k in POINTS:
             POINTS[k] = np.array([x, y], dtype=np.float32)
@@ -429,7 +470,6 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
     LA = POINTS["Cheville G"]; RA = POINTS["Cheville D"]
     LHE = POINTS["Talon G"]; RHE = POINTS["Talon D"]
 
-    # angles épaules / bassin
     raw_sh = math.degrees(math.atan2(LS[1]-RS[1], LS[0]-RS[0]))
     shoulder_angle = abs(raw_sh)
     if shoulder_angle > 90:
@@ -440,13 +480,11 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
     if hip_angle > 90:
         hip_angle = abs(hip_angle - 180)
 
-    # genoux / chevilles
     knee_l = femur_tibia_knee_angle(LH, LK, LA)
     knee_r = femur_tibia_knee_angle(RH, RK, RA)
     ankle_l = tibia_rearfoot_ankle_angle(LK, LA, LHE)
     ankle_r = tibia_rearfoot_ankle_angle(RK, RA, RHE)
 
-    # mm/px depuis taille
     px_height = max(LA[1], RA[1]) - min(LS[1], RS[1])
     mm_per_px = (float(taille_cm) * 10.0) / px_height if px_height > 0 else 0.0
     diff_shoulders_mm = abs(LS[1] - RS[1]) * mm_per_px
@@ -455,7 +493,6 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
     shoulder_lower = "Gauche" if LS[1] > RS[1] else "Droite"
     hip_lower = "Gauche" if LH[1] > RH[1] else "Droite"
 
-    # Annotated image
     ann_bgr = cv2.cvtColor(img_np.copy(), cv2.COLOR_RGB2BGR)
 
     for _, p in POINTS.items():
@@ -489,63 +526,15 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
     }
 
 # =========================
-# 8) SORTIE
+# 8) SORTIE (WEB + PDF) - mêmes données + CR médical
 # =========================
-def _to_float(val: str):
-    # extrait un float d'une string "12.3°" ou "12.3 mm"
-    if val is None:
-        return None
-    s = str(val).replace(",", ".")
-    num = ""
-    for ch in s:
-        if ch.isdigit() or ch in ".-":
-            num += ch
-        elif num:
-            break
-    try:
-        return float(num)
-    except:
-        return None
-
-def _badge(status: str):
-    # petit badge texte (Streamlit ancien compatible)
-    if status == "OK":
-        return "🟢 OK"
-    if status == "SURV":
-        return "🟠 À surveiller"
-    return "🔴 À corriger"
-
-def _status_from_mm(mm: float):
-    # seuils simples (à ajuster selon ta pratique)
-    if mm is None:
-        return "SURV"
-    if mm < 5:
-        return "OK"
-    if mm < 10:
-        return "SURV"
-    return "ALERTE"
-
-def _status_from_deg(deg: float):
-    if deg is None:
-        return "SURV"
-    if deg < 2:
-        return "OK"
-    if deg < 5:
-        return "SURV"
-    return "ALERTE"
-
 with col_result:
     st.subheader("🧾 Compte-rendu d'analyse posturale")
 
-    # --- extraction valeurs numériques
     sh_deg = _to_float(results.get("Inclinaison Épaules (0=horizon)"))
     hip_deg = _to_float(results.get("Inclinaison Bassin (0=horizon)"))
     sh_mm = _to_float(results.get("Dénivelé Épaules (mm)"))
     hip_mm = _to_float(results.get("Dénivelé Bassin (mm)"))
-    knee_l = _to_float(results.get("Angle Genou Gauche (fémur-tibia)"))
-    knee_r = _to_float(results.get("Angle Genou Droit (fémur-tibia)"))
-    ankle_l = _to_float(results.get("Angle Cheville G (tibia-arrière-pied)"))
-    ankle_r = _to_float(results.get("Angle Cheville D (tibia-arrière-pied)"))
 
     st.markdown("### 🧑‍⚕️ Identité")
     st.write(f"**Patient :** {nom}")
@@ -555,7 +544,6 @@ with col_result:
     st.markdown("---")
     st.markdown("### 📌 Synthèse (mêmes données que le PDF)")
 
-    # statuts
     sh_status = _status_from_mm(sh_mm)
     hip_status = _status_from_mm(hip_mm)
     sh_deg_status = _status_from_deg(sh_deg)
@@ -600,17 +588,6 @@ with col_result:
         st.write(f"- Cheville G (tibia-arrière-pied) : {results.get('Angle Cheville G (tibia-arrière-pied)', '—')}")
         st.write(f"- Cheville D (tibia-arrière-pied) : {results.get('Angle Cheville D (tibia-arrière-pied)', '—')}")
 
-    st.markdown("### 📝 Tableau (identique PDF)")
-    st.table(results)
-
-    st.markdown("### 🖼️ Image annotée")
-    st.image(
-        Image.fromarray(annotated, mode="RGB"),
-        caption="Points verts = utilisés | Violet = corrigé",
-        use_column_width=True
-    )
-
-    # mini interprétation simple (tu peux ajuster)
     st.markdown("### ✅ Observations automatiques")
     obs = []
     if sh_status == "ALERTE" or sh_deg_status == "ALERTE":
@@ -630,6 +607,16 @@ with col_result:
     for o in obs:
         st.write(f"- {o}")
 
+    st.markdown("### 📝 Tableau des mesures (identique PDF)")
+    st.table(results)
+
+    st.markdown("### 🖼️ Image annotée")
+    st.image(
+        Image.fromarray(annotated, mode="RGB"),
+        caption="Points verts = utilisés | Violet = corrigé",
+        use_column_width=True
+    )
+
     st.markdown("---")
     st.subheader("📄 PDF")
     pdf_bytes = generate_pdf(results, annotated)
@@ -640,4 +627,3 @@ with col_result:
         file_name=pdf_name,
         mime="application/pdf",
     )
-
