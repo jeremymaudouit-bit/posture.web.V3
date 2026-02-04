@@ -11,7 +11,7 @@ from fpdf import FPDF
 from datetime import datetime
 
 import mediapipe as mp
-from streamlit_drawable_canvas import st_canvas
+from streamlit_image_coordinates import streamlit_image_coordinates  # ✅ NEW
 
 st.title("🧍 Analyseur Postural Pro (MediaPipe)")
 st.markdown("---")
@@ -47,18 +47,15 @@ def calculate_angle(p1, p2, p3):
     return math.degrees(math.acos(np.clip(dot / mag, -1, 1)))
 
 def femur_tibia_knee_angle(hip, knee, ankle):
-    # Genou = Hanche–Genou–Cheville
     return calculate_angle(hip, knee, ankle)
 
 def tibia_rearfoot_ankle_angle(knee, ankle, heel):
-    # Cheville = Genou–Cheville–Talon
     return calculate_angle(knee, ankle, heel)
 
 def safe_point(lm, landmark_enum, w, h):
     p = lm[landmark_enum.value]
     return np.array([p.x * w, p.y * h], dtype=np.float32), float(p.visibility)
 
-# -------- PDF safe (évite Unicode crash) --------
 def pdf_safe(text) -> str:
     if text is None:
         return ""
@@ -120,14 +117,9 @@ def generate_pdf(data, img_np):
 
     return filename
 
-# ================= 3. SESSION (NÉCESSAIRE) =================
-# ✅ mémorise les corrections (1 seul point à la fois)
+# ================= 3. SESSION =================
 if "override_one" not in st.session_state:
     st.session_state["override_one"] = {}  # {"Cheville G": (x,y)}
-if "canvas_obj_count" not in st.session_state:
-    st.session_state["canvas_obj_count"] = 0
-if "canvas_reset_key" not in st.session_state:
-    st.session_state["canvas_reset_key"] = 0
 
 # ================= 4. UI =================
 with st.sidebar:
@@ -153,8 +145,6 @@ with st.sidebar:
     with c2:
         if st.button("🧹 Reset", disabled=not enable_click_edit):
             st.session_state["override_one"] = {}
-            st.session_state["canvas_obj_count"] = 0
-            st.session_state["canvas_reset_key"] += 1
 
 col_input, col_result = st.columns([1, 1])
 
@@ -168,7 +158,6 @@ with col_input:
 if not image_data:
     st.stop()
 
-# Lire image (✅ garde RGB)
 if isinstance(image_data, Image.Image):
     img_np = np.array(image_data.convert("RGB"))
 else:
@@ -177,64 +166,34 @@ else:
 img_np = rotate_if_landscape(img_np)
 h, w, _ = img_np.shape
 
-# ================= 6. CANVAS (MODIFS MINIMALES + FIX IMAGE NOIRE) =================
+# ================= 6. IMAGE CLIQUABLE (remplace le canvas) =================
 with col_input:
     st.subheader("📌 Cliquez pour placer le point sélectionné (avant analyse)")
     st.caption("Choisis un point à gauche, clique sur l'image, puis lance l'analyse.")
 
-    # ✅ Fix noir: forcer uint8 0..255 et ne PAS faire BGR->RGB (déjà RGB)
-    img_work = img_np
-    if img_work.dtype != np.uint8:
-        img_work = img_work.astype(np.float32)
-        if img_work.max() <= 1.5:
-            img_work = img_work * 255.0
-        img_work = np.clip(img_work, 0, 255).astype(np.uint8)
-
-    disp_w = min(800, w)
+    # On affiche une version redimensionnée pour clic confortable
+    disp_w = min(900, w)
     scale = disp_w / w
     disp_h = int(h * scale)
 
-    img_resized = cv2.resize(img_work, (disp_w, disp_h), interpolation=cv2.INTER_AREA)
-    bg_image = Image.fromarray(img_resized).convert("RGB")  # ✅ PIL RGB
+    img_disp = cv2.resize(img_np, (disp_w, disp_h), interpolation=cv2.INTER_AREA)
 
-    # (optionnel) debug: décommente si besoin
-    # st.image(bg_image, caption="DEBUG bg_image", use_container_width=True)
-
-    canvas = st_canvas(
-        background_image=bg_image,
-        height=disp_h,
-        width=disp_w,
-        drawing_mode="point" if enable_click_edit else "transform",
-        stroke_width=6,
-        stroke_color="#ff00ff",
-        fill_color="rgba(255,0,255,0.6)",
-        update_streamlit=True,
-        key=f"canvas_{st.session_state['canvas_reset_key']}"
+    coords = streamlit_image_coordinates(
+        Image.fromarray(img_disp),
+        key="img_click",
     )
 
-    # ✅ Lecture du clic (centre = left+radius)
-    if enable_click_edit and canvas.json_data is not None:
-        objs = canvas.json_data.get("objects", [])
-        prev = st.session_state["canvas_obj_count"]
+    if enable_click_edit and coords is not None:
+        # coords en pixels sur image affichée
+        cx = float(coords["x"])
+        cy = float(coords["y"])
 
-        if len(objs) > prev:
-            obj = objs[-1]
-            left = obj.get("left", None)
-            top = obj.get("top", None)
-            radius = obj.get("radius", 0)
+        # Convertir vers image originale
+        x_orig = cx / scale
+        y_orig = cy / scale
 
-            if left is not None and top is not None:
-                cx = float(left) + float(radius)
-                cy = float(top) + float(radius)
-
-                x_orig = cx / scale
-                y_orig = cy / scale
-
-                # ✅ 1 seul point stocké à la fois (celui choisi)
-                st.session_state["override_one"][point_to_edit] = (x_orig, y_orig)
-                st.session_state["canvas_obj_count"] = len(objs)
-
-                st.success(f"✅ {point_to_edit} placé à ({x_orig:.0f}, {y_orig:.0f}) px")
+        st.session_state["override_one"][point_to_edit] = (x_orig, y_orig)
+        st.success(f"✅ {point_to_edit} placé à ({x_orig:.0f}, {y_orig:.0f}) px")
 
     if st.session_state["override_one"]:
         st.write("**Point corrigé :**")
@@ -250,9 +209,7 @@ if not run:
     st.stop()
 
 with st.spinner("Détection (MediaPipe) + calculs..."):
-    img_rgb = img_work  # ✅ déjà RGB
-    res = pose.process(img_rgb)
-
+    res = pose.process(img_np)  # img_np est RGB uint8
     if not res.pose_landmarks:
         st.error("Aucune pose détectée. Photo plus nette, en pied, bien centrée.")
         st.stop()
@@ -260,7 +217,6 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
     lm = res.pose_landmarks.landmark
     L = mp_pose.PoseLandmark
 
-    # Points MediaPipe
     LS, _ = safe_point(lm, L.LEFT_SHOULDER, w, h)
     RS, _ = safe_point(lm, L.RIGHT_SHOULDER, w, h)
     LH, _ = safe_point(lm, L.LEFT_HIP, w, h)
@@ -280,19 +236,17 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
         "Talon G": LHE, "Talon D": RHE,
     }
 
-    # ✅ Appliquer la correction (1 point) uniquement si clé connue
+    # Appliquer correction (1 point)
     for k, (x, y) in st.session_state["override_one"].items():
         if k in POINTS:
             POINTS[k] = np.array([x, y], dtype=np.float32)
 
-    # Réassignation
     LS = POINTS["Epaule G"]; RS = POINTS["Epaule D"]
     LH = POINTS["Hanche G"]; RH = POINTS["Hanche D"]
     LK = POINTS["Genou G"];  RK = POINTS["Genou D"]
     LA = POINTS["Cheville G"]; RA = POINTS["Cheville D"]
     LHE = POINTS["Talon G"]; RHE = POINTS["Talon D"]
 
-    # Inclinaison épaules/bassin
     raw_sh = math.degrees(math.atan2(LS[1]-RS[1], LS[0]-RS[0]))
     shoulder_angle = abs(raw_sh)
     if shoulder_angle > 90:
@@ -303,13 +257,11 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
     if hip_angle > 90:
         hip_angle = abs(hip_angle - 180)
 
-    # Angles
     knee_l = femur_tibia_knee_angle(LH, LK, LA)
     knee_r = femur_tibia_knee_angle(RH, RK, RA)
     ankle_l = tibia_rearfoot_ankle_angle(LK, LA, LHE)
     ankle_r = tibia_rearfoot_ankle_angle(RK, RA, RHE)
 
-    # mm/pixel (approx)
     px_height = max(LA[1], RA[1]) - min(LS[1], RS[1])
     mm_per_px = (float(taille_cm) * 10.0) / px_height if px_height > 0 else 0.0
     diff_shoulders_mm = abs(LS[1] - RS[1]) * mm_per_px
@@ -321,12 +273,10 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
         shoulder_lower = "Droite" if shoulder_lower == "Gauche" else "Gauche"
         hip_lower = "Droite" if hip_lower == "Gauche" else "Gauche"
 
-    # Annotation
-    annotated = img_work.copy()
+    annotated = img_np.copy()
     for _, p in POINTS.items():
         cv2.circle(annotated, tuple(p.astype(int)), 7, (0, 255, 0), -1)
 
-    # highlight du point corrigé (sécurisé)
     for name in list(st.session_state["override_one"].keys()):
         if name in POINTS:
             p = POINTS[name]
@@ -334,9 +284,6 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
 
     cv2.line(annotated, tuple(LS.astype(int)), tuple(RS.astype(int)), (255, 0, 0), 3)
     cv2.line(annotated, tuple(LH.astype(int)), tuple(RH.astype(int)), (255, 0, 0), 3)
-
-    cv2.putText(annotated, f"Vue: {vue}",
-                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
 
     results = {
         "Nom": nom,
