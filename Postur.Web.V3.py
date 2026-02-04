@@ -394,7 +394,18 @@ with col_result:
 
     st.subheader("🖼️ Image annotée")
     # ✅ plus robuste que st.image(bytes)
-    st.image(annotated, caption="Points verts = utilisés | Violet = corrigé", use_container_width=True)
+   annotated = ensure_uint8_rgb(annotated)
+
+if annotated is None or annotated.size == 0 or annotated.ndim != 3 or annotated.shape[2] != 3:
+    st.error("Image annotée invalide (format inattendu).")
+else:
+    st.image(
+        Image.fromarray(annotated, mode="RGB"),
+        caption="Points verts = utilisés | Violet = corrigé",
+        use_container_width=True
+    )
+
+
 
     st.subheader("📄 PDF")
     pdf_bytes = generate_pdf(results, annotated)
@@ -406,3 +417,4 @@ with col_result:
         mime="application/pdf",
         use_container_width=True
     )
+
