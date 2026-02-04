@@ -217,6 +217,10 @@ with col_input:
         key=f"canvas_{st.session_state['canvas_reset_key']}"
     )
 
+if bg_image is not None:
+    st.caption(f"Image affichée : {bg_image.size[0]} x {bg_image.size[1]}")
+else:
+    st.error("❌ Image de fond non chargée")
 
     if st.session_state["overrides"]:
         st.write("**Points corrigés :**")
@@ -347,4 +351,5 @@ with col_result:
             mime="application/pdf",
             use_container_width=True
         )
+
 
