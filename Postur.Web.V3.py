@@ -168,6 +168,47 @@ def _status_from_deg(deg: float):
 # PDF PRO (EN MÉMOIRE + COMPAT FPDF)
 # =========================
 def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
+    from fpdf import FPDF
+    import os
+    import tempfile
+    from PIL import Image
+    from datetime import datetime
+
+    def _pdf_safe(text):
+        if text is None:
+            return ""
+        s = str(text)
+        s = (s.replace("°", " deg")
+               .replace("–", "-")
+               .replace("—", "-")
+               .replace("’", "'")
+               .replace("“", '"')
+               .replace("”", '"')
+               .replace("\xa0", " "))
+        return s.encode("latin-1", errors="ignore").decode("latin-1")
+
+    def _to_float(val):
+        try:
+            s = str(val).replace(",", ".")
+            num = ""
+            for ch in s:
+                if ch.isdigit() or ch in ".-":
+                    num += ch
+                elif num:
+                    break
+            return float(num)
+        except:
+            return None
+
+    def _status_mm(v):
+        if v is None:
+            return "A SURV"
+        if v < 5:
+            return "OK"
+        if v < 10:
+            return "A SURV"
+        return "ALERTE"
+
     pdf = FPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
@@ -178,99 +219,68 @@ def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Arial", 'B', 20)
     pdf.set_y(10)
-    pdf.cell(0, 10, pdf_safe("COMPTE-RENDU POSTURAL (IA)"), ln=True, align="C")
+    pdf.cell(0, 10, "COMPTE-RENDU POSTURAL (IA)", align="C", ln=True)
 
     # Infos patient
     pdf.set_text_color(0, 0, 0)
-    pdf.set_y(40)
+    pdf.set_y(42)
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(120, 8, pdf_safe(f"Patient : {data.get('Nom','')}"), ln=0)
+    pdf.cell(120, 8, _pdf_safe(f"Patient : {data.get('Nom','')}"), ln=0)
     pdf.set_font("Arial", '', 11)
-    pdf.cell(70, 8, pdf_safe(datetime.now().strftime('%d/%m/%Y %H:%M')), ln=1, align="R")
+    pdf.cell(70, 8, datetime.now().strftime("%d/%m/%Y %H:%M"), ln=1, align="R")
     pdf.ln(2)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(4)
 
     # Image
-    img_rgb_uint8 = ensure_uint8_rgb(img_rgb_uint8)
-    tmp_img = os.path.join(tempfile.gettempdir(), "temp_analysis.png")
-    Image.fromarray(img_rgb_uint8, mode="RGB").save(tmp_img)
+    tmp_img = os.path.join(tempfile.gettempdir(), "posture_tmp.png")
+    Image.fromarray(img_rgb_uint8).save(tmp_img)
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 7, pdf_safe("Photographie annotée"), ln=1)
+    pdf.cell(0, 7, "Photographie annotée", ln=True)
     pdf.image(tmp_img, x=45, w=120)
-    pdf.ln(3)
+    pdf.ln(4)
 
     # Synthèse
     sh_mm = _to_float(data.get("Dénivelé Épaules (mm)"))
     hip_mm = _to_float(data.get("Dénivelé Bassin (mm)"))
-    sh_deg = _to_float(data.get("Inclinaison Épaules (0=horizon)"))
-    hip_deg = _to_float(data.get("Inclinaison Bassin (0=horizon)"))
 
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 7, pdf_safe("Synthèse"), ln=1)
+    pdf.cell(0, 7, "Synthèse", ln=True)
     pdf.set_font("Arial", '', 11)
-    pdf.cell(0, 6, pdf_safe(f"- Épaules : {data.get('Dénivelé Épaules (mm)','—')} / {data.get('Inclinaison Épaules (0=horizon)','—')}  [{_status_from_mm(sh_mm)}]"), ln=1)
-    pdf.cell(0, 6, pdf_safe(f"- Bassin  : {data.get('Dénivelé Bassin (mm)','—')} / {data.get('Inclinaison Bassin (0=horizon)','—')}  [{_status_from_mm(hip_mm)}]"), ln=1)
-    pdf.ln(2)
+    pdf.cell(0, 6, _pdf_safe(f"- Épaules : {data.get('Dénivelé Épaules (mm)','—')} [{_status_mm(sh_mm)}]"), ln=True)
+    pdf.cell(0, 6, _pdf_safe(f"- Bassin  : {data.get('Dénivelé Bassin (mm)','—')} [{_status_mm(hip_mm)}]"), ln=True)
+    pdf.ln(3)
 
-    # Tableau indicateurs
+    # Tableau
     pdf.set_font("Arial", 'B', 12)
     pdf.set_fill_color(240, 240, 240)
-    pdf.cell(120, 9, pdf_safe("Indicateur"), 1, 0, 'L', True)
-    pdf.cell(70, 9, pdf_safe("Valeur"), 1, 1, 'C', True)
-
-    out = pdf.output(dest="S")
-    if isinstance(out, (bytes, bytearray)):
-        return bytes(out)
-    return out.encode("latin-1")
-
+    pdf.cell(120, 9, "Indicateur", 1, 0, 'L', True)
+    pdf.cell(70, 9, "Valeur", 1, 1, 'C', True)
 
     pdf.set_font("Arial", '', 11)
     for k, v in data.items():
         if k != "Nom":
-            pdf.cell(120, 8, " " + pdf_safe(k), 1, 0, 'L')
-            pdf.cell(70, 8, " " + pdf_safe(v), 1, 1, 'C')
+            pdf.cell(120, 8, _pdf_safe(k), 1, 0, 'L')
+            pdf.cell(70, 8, _pdf_safe(v), 1, 1, 'C')
 
-    # Observations auto
+    # Observations
     pdf.ln(4)
     pdf.set_font("Arial", 'B', 12)
-    pdf.cell(0, 7, pdf_safe("Observations automatiques"), ln=1)
+    pdf.cell(0, 7, "Observations automatiques", ln=True)
     pdf.set_font("Arial", '', 11)
 
     obs = []
-    if _status_from_mm(sh_mm) == "ALERTE" or _status_from_deg(sh_deg) == "ALERTE":
-        obs.append("Épaules : asymétrie marquée (contrôle clinique recommandé).")
-    elif _status_from_mm(sh_mm) == "SURV" or _status_from_deg(sh_deg) == "SURV":
-        obs.append("Épaules : légère asymétrie (à surveiller).")
-    else:
-        obs.append("Épaules : alignement satisfaisant.")
+    obs.append("Analyse générée automatiquement à partir d'une image 2D.")
+    obs.append("Les mesures dépendent de la qualité de la prise de vue.")
 
-    if _status_from_mm(hip_mm) == "ALERTE" or _status_from_deg(hip_deg) == "ALERTE":
-        obs.append("Bassin : bascule marquée (contrôle clinique recommandé).")
-    elif _status_from_mm(hip_mm) == "SURV" or _status_from_deg(hip_deg) == "SURV":
-        obs.append("Bassin : légère bascule (à surveiller).")
-    else:
-        obs.append("Bassin : alignement satisfaisant.")
-
-def _safe_multicell(txt: str, w: float = 190, h: float = 6):
-    t = pdf_safe(txt).replace("\xa0", " ").strip()
-    if not t:
-        return
-    try:
-        pdf.multi_cell(w, h, t)
-    except Exception:
-        # Fallback ultime : une ligne simple (tronquée)
-        pdf.cell(w, h, t[:180], ln=1)
-
-for o in obs:
-    _safe_multicell(f"- {o}")
-
+    for o in obs:
+        pdf.multi_cell(190, 6, _pdf_safe(f"- {o}"))
 
     # Footer
     pdf.set_y(-18)
     pdf.set_font("Arial", 'I', 8)
     pdf.set_text_color(120, 120, 120)
-    pdf.cell(0, 10, pdf_safe("Document indicatif - Ne remplace pas un avis médical. Mesures dépendantes de la qualité photo."), align="C")
+    pdf.cell(0, 10, "Document indicatif - Ne remplace pas un avis médical.", align="C")
 
     if os.path.exists(tmp_img):
         os.remove(tmp_img)
@@ -644,6 +654,7 @@ with col_result:
         file_name=pdf_name,
         mime="application/pdf",
     )
+
 
 
 
