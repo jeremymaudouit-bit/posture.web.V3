@@ -42,6 +42,12 @@ def tibia_vertical_angle(knee, ankle):
     if mag == 0: return 0
     return math.degrees(math.acos(np.clip(dot / mag, -1, 1)))
 
+def detect_front_or_back(kps, visibility_threshold=0.2):
+    """Détecte si la personne est de face ou de dos"""
+    face_points = [0, 1, 2, 3, 4]  # Nez, yeux, oreilles
+    visible = sum(kps[i][2] > visibility_threshold for i in face_points)
+    return "Face" if visible >= 2 else "Dos"
+
 def generate_pdf(data, img_np):
     pdf = FPDF()
     pdf.add_page()
@@ -139,22 +145,25 @@ if image_data:
                 y, x, s = kps[i]
                 return np.array([x*w, y*h])
 
+            # Détection Face/Dos
+            view = detect_front_or_back(kps)
+            st.write(f"Vue détectée : {view}")
+
             # Points clés
             LS, RS = pt(5), pt(6)   # Épaules
             LH, RH = pt(11), pt(12) # Bassin
             LK, RK = pt(13), pt(14) # Genoux
             LA, RA = pt(15), pt(16) # Chevilles
 
-            # --- Calcul des angles (Référence 0° = Horizontal) ---
+            # --- Calcul des angles ---
             raw_shoulder_angle = math.degrees(math.atan2(LS[1]-RS[1], LS[0]-RS[0]))
             shoulder_angle = abs(raw_shoulder_angle)
             if shoulder_angle > 90: shoulder_angle = abs(shoulder_angle - 180)
 
             raw_hip_angle = math.degrees(math.atan2(LH[1]-RH[1], LH[0]-RH[0]))
             hip_angle = abs(raw_hip_angle)
-            if hip_angle > 90: hip_angle = abs(hip_angle - 180)
+            if hip_angle > 90: hip_angle = abs(raw_hip_angle - 180)
 
-            # --- Articulations et mm ---
             knee_l = calculate_angle(LH, LK, LA)
             knee_r = calculate_angle(RH, RK, RA)
             ankle_l = tibia_vertical_angle(LK, LA)
@@ -169,6 +178,11 @@ if image_data:
             shoulder_lower = "Gauche" if LS[1] > RS[1] else "Droite"
             hip_lower = "Gauche" if LH[1] > RH[1] else "Droite"
 
+            # Inverser si dos
+            if view == "Dos":
+                shoulder_lower = "Droite" if shoulder_lower == "Gauche" else "Gauche"
+                hip_lower = "Droite" if hip_lower == "Gauche" else "Gauche"
+
             # Annotation visuelle
             annotated = img_np.copy()
             points_list = [LS, RS, LH, RH, LK, RK, LA, RA]
@@ -182,10 +196,13 @@ if image_data:
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             cv2.putText(annotated, f"Bassin: {hip_lower} plus bas",
                         (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(annotated, f"Vue détectée : {view}",
+                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
             # Résultats à afficher
             results = {
                 "Nom": nom,
+                "Vue": view,
                 "Inclinaison Épaules (Horizon = 0°)": f"{shoulder_angle:.1f}°",
                 "Épaule la plus basse": shoulder_lower,
                 "Inclinaison Bassin (Horizon = 0°)": f"{hip_angle:.1f}°",
