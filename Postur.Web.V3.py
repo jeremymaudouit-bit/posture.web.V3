@@ -394,7 +394,8 @@ with col_result:
 
     st.subheader("🖼️ Image annotée")
     # ✅ plus robuste que st.image(bytes)
-   annotated = ensure_uint8_rgb(annotated)
+
+annotated = ensure_uint8_rgb(annotated)
 
 if annotated is None or annotated.size == 0 or annotated.ndim != 3 or annotated.shape[2] != 3:
     st.error("Image annotée invalide (format inattendu).")
@@ -417,4 +418,5 @@ else:
         mime="application/pdf",
         use_container_width=True
     )
+
 
