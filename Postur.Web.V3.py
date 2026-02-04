@@ -50,32 +50,37 @@ J = {
     "Cheville G":15, "Cheville D":16
 }
 
-def angle(a,b,c,joint_type="Genou"):
+def angle_genou(a,b,c):
     """
-    Calcule l'angle en degrés au point b formé par les points a-b-c.
-    Correction intégrée pour avoir :
-    - Genou : 180° jambe étendue
-    - Hanche : 180° jambe alignée
-    - Cheville : 90° jambe droite
+    Calcule l'angle du genou (0 = jambe pliée, 180 = jambe droite) 
+    à partir de points a (hanche), b (genou), c (cheville).
     """
-    # Inversion axe Y pour correspondre au repère classique
-    a_, b_, c_ = a.copy(), b.copy(), c.copy()
-    a_[1], b_[1], c_[1] = -a_[1], -b_[1], -c_[1]
+    ba = a - b
+    bc = c - b
+    # inversion axe Y pour correspondre au repère classique
+    ba[1] *= -1
+    bc[1] *= -1
 
-    ba, bc = a_ - b_, c_ - b_
-    ang = np.degrees(
-        np.arccos(
-            np.clip(np.dot(ba, bc)/(np.linalg.norm(ba)*np.linalg.norm(bc)+1e-6), -1, 1)
-        )
-    )
+    cos_theta = np.dot(ba, bc) / (np.linalg.norm(ba)*np.linalg.norm(bc)+1e-6)
+    ang = np.clip(np.degrees(np.arccos(cos_theta)), 0, 180)
+    return ang
 
-    # Ajustement selon le type d'articulation
-    if joint_type == "Genou":
-        return 180 - ang   # 180° jambe étendue
-    elif joint_type == "Hanche":
-        return 180 - ang   # 180° jambe alignée
+def angle(a,b,c,joint_type="Hanche/Cheville"):
+    """
+    Fonction pour les autres articulations : hanche ou cheville
+    """
+    ba = a - b
+    bc = c - b
+    ba[1] *= -1
+    bc[1] *= -1
+    cos_theta = np.dot(ba, bc) / (np.linalg.norm(ba)*np.linalg.norm(bc)+1e-6)
+    ang = np.clip(np.degrees(np.arccos(cos_theta)), 0, 180)
+
+    # Ajustement par défaut
+    if joint_type == "Hanche":
+        return 180 - ang
     elif joint_type == "Cheville":
-        return 90 - (ang - 90)  # 90° jambe droite
+        return 90 - (ang - 90)
     else:
         return ang
 
@@ -112,8 +117,8 @@ def process_video(path):
         res["Hanche G"].append(angle(kp[J["Epaule G"],:2], kp[J["Hanche G"],:2], kp[J["Genou G"],:2],"Hanche"))
         res["Hanche D"].append(angle(kp[J["Epaule D"],:2], kp[J["Hanche D"],:2], kp[J["Genou D"],:2],"Hanche"))
 
-        res["Genou G"].append(angle(kp[J["Hanche G"],:2], kp[J["Genou G"],:2], kp[J["Cheville G"],:2],"Genou"))
-        res["Genou D"].append(angle(kp[J["Hanche D"],:2], kp[J["Genou D"],:2], kp[J["Cheville D"],:2],"Genou"))
+        res["Genou G"].append(angle_genou(kp[J["Hanche G"],:2], kp[J["Genou G"],:2], kp[J["Cheville G"],:2]))
+        res["Genou D"].append(angle_genou(kp[J["Hanche D"],:2], kp[J["Genou D"],:2], kp[J["Cheville D"],:2]))
 
         res["Cheville G"].append(angle(kp[J["Genou G"],:2], kp[J["Cheville G"],:2], kp[J["Cheville G"],:2]+[0,1],"Cheville"))
         res["Cheville D"].append(angle(kp[J["Genou D"],:2], kp[J["Cheville D"],:2], kp[J["Cheville D"],:2]+[0,1],"Cheville"))
