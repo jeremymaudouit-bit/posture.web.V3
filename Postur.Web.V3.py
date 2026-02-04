@@ -392,7 +392,7 @@ with col_result:
     st.subheader("📊 Résultats")
     st.table(results)
 
- st.subheader("🖼️ Image annotée")
+st.subheader("🖼️ Image annotée")
 
 annotated = ensure_uint8_rgb(annotated)
 
@@ -445,6 +445,7 @@ except Exception as e:
         mime="application/pdf",
         use_container_width=True
     )
+
 
 
 
