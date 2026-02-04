@@ -129,47 +129,118 @@ def crop_to_landmarks(img_rgb_uint8: np.ndarray, res_pose, pad_ratio: float = 0.
 
 # =========================
 # PDF PRO (EN MÉMOIRE + COMPAT FPDF)
-# =========================
 def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
     pdf = FPDF()
     pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
 
+    # Bandeau
     pdf.set_fill_color(31, 73, 125)
-    pdf.rect(0, 0, 210, 40, 'F')
+    pdf.rect(0, 0, 210, 35, 'F')
     pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Arial", 'B', 22)
-    pdf.cell(0, 20, pdf_safe("BILAN POSTURAL IA"), ln=True, align="C")
+    pdf.set_font("Arial", 'B', 20)
+    pdf.set_y(10)
+    pdf.cell(0, 10, pdf_safe("COMPTE-RENDU POSTURAL (IA)"), ln=True, align="C")
 
+    # Infos patient
     pdf.set_text_color(0, 0, 0)
+    pdf.set_y(40)
     pdf.set_font("Arial", 'B', 12)
-    pdf.ln(25)
-    pdf.cell(110, 10, pdf_safe(f"Patient : {data.get('Nom','')}"), ln=0)
+    pdf.cell(120, 8, pdf_safe(f"Patient : {data.get('Nom','')}"), ln=0)
     pdf.set_font("Arial", '', 11)
-    pdf.cell(80, 10, pdf_safe(datetime.now().strftime('%d/%m/%Y %H:%M')), ln=1, align="R")
-    pdf.line(10, 68, 200, 68)
-    pdf.ln(5)
+    pdf.cell(70, 8, pdf_safe(datetime.now().strftime('%d/%m/%Y %H:%M')), ln=1, align="R")
+    pdf.ln(2)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(4)
 
+    # Image
     img_rgb_uint8 = ensure_uint8_rgb(img_rgb_uint8)
     tmp_img = os.path.join(tempfile.gettempdir(), "temp_analysis.png")
     Image.fromarray(img_rgb_uint8, mode="RGB").save(tmp_img)
-    pdf.image(tmp_img, x=55, w=100)
-    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 7, pdf_safe("Photographie annotée"), ln=1)
+    pdf.image(tmp_img, x=45, w=120)
+    pdf.ln(3)
+
+    # Section synthèse
+    def _num(s):
+        try:
+            ss = str(s).replace(",", ".")
+            num = ""
+            for ch in ss:
+                if ch.isdigit() or ch in ".-":
+                    num += ch
+                elif num:
+                    break
+            return float(num)
+        except:
+            return None
+
+    sh_mm = _num(data.get("Dénivelé Épaules (mm)"))
+    hip_mm = _num(data.get("Dénivelé Bassin (mm)"))
+    sh_deg = _num(data.get("Inclinaison Épaules (0=horizon)"))
+    hip_deg = _num(data.get("Inclinaison Bassin (0=horizon)"))
+
+    def _flag_mm(v):
+        if v is None: return "A SURV"
+        if v < 5: return "OK"
+        if v < 10: return "A SURV"
+        return "ALERTE"
+
+    def _flag_deg(v):
+        if v is None: return "A SURV"
+        if v < 2: return "OK"
+        if v < 5: return "A SURV"
+        return "ALERTE"
 
     pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 7, pdf_safe("Synthèse"), ln=1)
+    pdf.set_font("Arial", '', 11)
+    pdf.cell(0, 6, pdf_safe(f"- Épaules : {data.get('Dénivelé Épaules (mm)','—')} / {data.get('Inclinaison Épaules (0=horizon)','—')}  [{_flag_mm(sh_mm)}]"), ln=1)
+    pdf.cell(0, 6, pdf_safe(f"- Bassin  : {data.get('Dénivelé Bassin (mm)','—')} / {data.get('Inclinaison Bassin (0=horizon)','—')}  [{_flag_mm(hip_mm)}]"), ln=1)
+    pdf.ln(2)
+
+    # Tableau indicateurs
+    pdf.set_font("Arial", 'B', 12)
     pdf.set_fill_color(240, 240, 240)
-    pdf.cell(120, 10, pdf_safe("Indicateur"), 1, 0, 'L', True)
-    pdf.cell(70, 10, pdf_safe("Valeur"), 1, 1, 'C', True)
+    pdf.cell(120, 9, pdf_safe("Indicateur"), 1, 0, 'L', True)
+    pdf.cell(70, 9, pdf_safe("Valeur"), 1, 1, 'C', True)
 
     pdf.set_font("Arial", '', 11)
     for k, v in data.items():
         if k != "Nom":
-            pdf.cell(120, 9, " " + pdf_safe(k), 1, 0, 'L')
-            pdf.cell(70, 9, " " + pdf_safe(v), 1, 1, 'C')
+            pdf.cell(120, 8, " " + pdf_safe(k), 1, 0, 'L')
+            pdf.cell(70, 8, " " + pdf_safe(v), 1, 1, 'C')
 
-    pdf.set_y(-20)
+    # Observations auto
+    pdf.ln(4)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 7, pdf_safe("Observations automatiques"), ln=1)
+    pdf.set_font("Arial", '', 11)
+
+    obs = []
+    if _flag_mm(sh_mm) == "ALERTE" or _flag_deg(sh_deg) == "ALERTE":
+        obs.append("Épaules : asymétrie marquée (contrôle clinique recommandé).")
+    elif _flag_mm(sh_mm) == "A SURV" or _flag_deg(sh_deg) == "A SURV":
+        obs.append("Épaules : légère asymétrie (à surveiller).")
+    else:
+        obs.append("Épaules : alignement satisfaisant.")
+
+    if _flag_mm(hip_mm) == "ALERTE" or _flag_deg(hip_deg) == "ALERTE":
+        obs.append("Bassin : bascule marquée (contrôle clinique recommandé).")
+    elif _flag_mm(hip_mm) == "A SURV" or _flag_deg(hip_deg) == "A SURV":
+        obs.append("Bassin : légère bascule (à surveiller).")
+    else:
+        obs.append("Bassin : alignement satisfaisant.")
+
+    for o in obs:
+        pdf.multi_cell(0, 6, pdf_safe(f"- {o}"))
+
+    # Footer
+    pdf.set_y(-18)
     pdf.set_font("Arial", 'I', 8)
     pdf.set_text_color(120, 120, 120)
-    pdf.cell(0, 10, pdf_safe("Document indicatif - Ne remplace pas un avis médical."), align="C")
+    pdf.cell(0, 10, pdf_safe("Document indicatif - Ne remplace pas un avis médical. Mesures dépendantes de la qualité photo."), align="C")
 
     if os.path.exists(tmp_img):
         os.remove(tmp_img)
@@ -179,33 +250,6 @@ def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
         return bytes(out)
     return out.encode("latin-1")
 
-def extract_origin_points_from_mediapipe(img_rgb_uint8: np.ndarray):
-    res = pose.process(img_rgb_uint8)
-    if not res.pose_landmarks:
-        return {}
-    lm = res.pose_landmarks.landmark
-    L = mp_pose.PoseLandmark
-    h, w = img_rgb_uint8.shape[:2]
-
-    def pt_px(enum_):
-        p = lm[enum_.value]
-        return (float(p.x * w), float(p.y * h))
-
-    # ✅ hanches exposées + épaules gardées en "_" (non éditables mais dispo si besoin)
-    return {
-        "Genou G": pt_px(L.LEFT_KNEE),
-        "Genou D": pt_px(L.RIGHT_KNEE),
-        "Cheville G": pt_px(L.LEFT_ANKLE),
-        "Cheville D": pt_px(L.RIGHT_ANKLE),
-        "Talon G": pt_px(L.LEFT_HEEL),
-        "Talon D": pt_px(L.RIGHT_HEEL),
-
-        "Hanche G": pt_px(L.LEFT_HIP),
-        "Hanche D": pt_px(L.RIGHT_HIP),
-
-        "_Epaule G": pt_px(L.LEFT_SHOULDER),
-        "_Epaule D": pt_px(L.RIGHT_SHOULDER),
-    }
 
 def draw_preview(img_disp_rgb_uint8: np.ndarray, origin_points: dict, override_one: dict, scale: float) -> np.ndarray:
     out = img_disp_rgb_uint8.copy()
@@ -447,19 +491,146 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
 # =========================
 # 8) SORTIE
 # =========================
+def _to_float(val: str):
+    # extrait un float d'une string "12.3°" ou "12.3 mm"
+    if val is None:
+        return None
+    s = str(val).replace(",", ".")
+    num = ""
+    for ch in s:
+        if ch.isdigit() or ch in ".-":
+            num += ch
+        elif num:
+            break
+    try:
+        return float(num)
+    except:
+        return None
+
+def _badge(status: str):
+    # petit badge texte (Streamlit ancien compatible)
+    if status == "OK":
+        return "🟢 OK"
+    if status == "SURV":
+        return "🟠 À surveiller"
+    return "🔴 À corriger"
+
+def _status_from_mm(mm: float):
+    # seuils simples (à ajuster selon ta pratique)
+    if mm is None:
+        return "SURV"
+    if mm < 5:
+        return "OK"
+    if mm < 10:
+        return "SURV"
+    return "ALERTE"
+
+def _status_from_deg(deg: float):
+    if deg is None:
+        return "SURV"
+    if deg < 2:
+        return "OK"
+    if deg < 5:
+        return "SURV"
+    return "ALERTE"
+
 with col_result:
-    st.subheader("📊 Résultats")
+    st.subheader("🧾 Compte-rendu d'analyse posturale")
+
+    # --- extraction valeurs numériques
+    sh_deg = _to_float(results.get("Inclinaison Épaules (0=horizon)"))
+    hip_deg = _to_float(results.get("Inclinaison Bassin (0=horizon)"))
+    sh_mm = _to_float(results.get("Dénivelé Épaules (mm)"))
+    hip_mm = _to_float(results.get("Dénivelé Bassin (mm)"))
+    knee_l = _to_float(results.get("Angle Genou Gauche (fémur-tibia)"))
+    knee_r = _to_float(results.get("Angle Genou Droit (fémur-tibia)"))
+    ankle_l = _to_float(results.get("Angle Cheville G (tibia-arrière-pied)"))
+    ankle_r = _to_float(results.get("Angle Cheville D (tibia-arrière-pied)"))
+
+    st.markdown("### 🧑‍⚕️ Identité")
+    st.write(f"**Patient :** {nom}")
+    st.write(f"**Taille déclarée :** {taille_cm} cm")
+    st.write(f"**Date/heure :** {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+
+    st.markdown("---")
+    st.markdown("### 📌 Synthèse (mêmes données que le PDF)")
+
+    # statuts
+    sh_status = _status_from_mm(sh_mm)
+    hip_status = _status_from_mm(hip_mm)
+    sh_deg_status = _status_from_deg(sh_deg)
+    hip_deg_status = _status_from_deg(hip_deg)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown("**Épaules (mm)**")
+        st.write(results.get("Dénivelé Épaules (mm)", "—"))
+        st.write(_badge(sh_status))
+    with c2:
+        st.markdown("**Épaules (°)**")
+        st.write(results.get("Inclinaison Épaules (0=horizon)", "—"))
+        st.write(_badge(sh_deg_status))
+    with c3:
+        st.markdown("**Bassin (mm)**")
+        st.write(results.get("Dénivelé Bassin (mm)", "—"))
+        st.write(_badge(hip_status))
+    with c4:
+        st.markdown("**Bassin (°)**")
+        st.write(results.get("Inclinaison Bassin (0=horizon)", "—"))
+        st.write(_badge(hip_deg_status))
+
+    st.markdown("### 🧩 Détails")
+    left, right = st.columns(2)
+
+    with left:
+        st.markdown("**Alignement frontal**")
+        st.write(f"- Inclinaison épaules : {results.get('Inclinaison Épaules (0=horizon)', '—')}")
+        st.write(f"- Épaule la plus basse : {results.get('Épaule la plus basse', '—')}")
+        st.write(f"- Dénivelé épaules : {results.get('Dénivelé Épaules (mm)', '—')}")
+        st.write("")
+        st.write(f"- Inclinaison bassin : {results.get('Inclinaison Bassin (0=horizon)', '—')}")
+        st.write(f"- Bassin le plus bas : {results.get('Bassin le plus bas', '—')}")
+        st.write(f"- Dénivelé bassin : {results.get('Dénivelé Bassin (mm)', '—')}")
+
+    with right:
+        st.markdown("**Membres inférieurs**")
+        st.write(f"- Genou G (fémur-tibia) : {results.get('Angle Genou Gauche (fémur-tibia)', '—')}")
+        st.write(f"- Genou D (fémur-tibia) : {results.get('Angle Genou Droit (fémur-tibia)', '—')}")
+        st.write("")
+        st.write(f"- Cheville G (tibia-arrière-pied) : {results.get('Angle Cheville G (tibia-arrière-pied)', '—')}")
+        st.write(f"- Cheville D (tibia-arrière-pied) : {results.get('Angle Cheville D (tibia-arrière-pied)', '—')}")
+
+    st.markdown("### 📝 Tableau (identique PDF)")
     st.table(results)
 
-    st.subheader("🖼️ Image annotée")
-    # Streamlit ancien -> use_column_width
-    # Affichage plus petit + cadré déjà fait en amont
+    st.markdown("### 🖼️ Image annotée")
     st.image(
         Image.fromarray(annotated, mode="RGB"),
         caption="Points verts = utilisés | Violet = corrigé",
         use_column_width=True
     )
 
+    # mini interprétation simple (tu peux ajuster)
+    st.markdown("### ✅ Observations automatiques")
+    obs = []
+    if sh_status == "ALERTE" or sh_deg_status == "ALERTE":
+        obs.append("Épaules : asymétrie marquée (contrôle clinique recommandé).")
+    elif sh_status == "SURV" or sh_deg_status == "SURV":
+        obs.append("Épaules : légère asymétrie (à surveiller).")
+    else:
+        obs.append("Épaules : alignement satisfaisant.")
+
+    if hip_status == "ALERTE" or hip_deg_status == "ALERTE":
+        obs.append("Bassin : bascule marquée (contrôle clinique recommandé).")
+    elif hip_status == "SURV" or hip_deg_status == "SURV":
+        obs.append("Bassin : légère bascule (à surveiller).")
+    else:
+        obs.append("Bassin : alignement satisfaisant.")
+
+    for o in obs:
+        st.write(f"- {o}")
+
+    st.markdown("---")
     st.subheader("📄 PDF")
     pdf_bytes = generate_pdf(results, annotated)
     pdf_name = f"Bilan_{pdf_safe(results.get('Nom','Anonyme')).replace(' ', '_')}.pdf"
@@ -469,3 +640,4 @@ with col_result:
         file_name=pdf_name,
         mime="application/pdf",
     )
+
