@@ -185,39 +185,38 @@ with col_input:
     bg_rgb = cv2.resize(bg_rgb, (disp_w, disp_h), interpolation=cv2.INTER_AREA)
     bg_pil = Image.fromarray(bg_rgb).convert("RGB")  # ✅ important
 
+with col_input:
+    st.subheader("📌 Cliquez pour positionner le point sélectionné")
+
+    disp_w = min(800, w)
+    scale = disp_w / w
+    disp_h = int(h * scale)
+
+    # ⚠️ OBLIGATOIRE : partir du numpy ORIGINAL
+    img_rgb = cv2.cvtColor(img_np, cv2.COLOR_BGR2RGB)
+
+    # ⚠️ Resize AVANT conversion PIL
+    img_rgb_resized = cv2.resize(
+        img_rgb,
+        (disp_w, disp_h),
+        interpolation=cv2.INTER_AREA
+    )
+
+    # ⚠️ Conversion PIL finale
+    bg_image = Image.fromarray(img_rgb_resized).convert("RGB")
+
     canvas = st_canvas(
-        background_image=bg_pil,
+        background_image=bg_image,
         height=disp_h,
         width=disp_w,
         drawing_mode="point" if enable_click_edit else "transform",
-        stroke_width=2,
+        stroke_width=6,
         stroke_color="#ff00ff",
-        fill_color="rgba(255,0,255,0.35)",
+        fill_color="rgba(255,0,255,0.6)",
         update_streamlit=True,
-        key=f"canvas_pre_{st.session_state['canvas_reset_key']}"
+        key=f"canvas_{st.session_state['canvas_reset_key']}"
     )
 
-    if enable_click_edit and canvas.json_data is not None:
-        objs = canvas.json_data.get("objects", [])
-        prev = st.session_state["canvas_obj_count"]
-
-        if len(objs) > prev:
-            obj = objs[-1]
-            left = obj.get("left", None)
-            top = obj.get("top", None)
-            radius = obj.get("radius", 0)
-
-            if left is not None and top is not None:
-                # ✅ centre réel du point
-                cx = float(left) + float(radius)
-                cy = float(top) + float(radius)
-
-                x_orig = cx / scale
-                y_orig = cy / scale
-
-                st.session_state["overrides"][point_to_edit] = (x_orig, y_orig)
-                st.session_state["canvas_obj_count"] = len(objs)
-                st.success(f"✅ {point_to_edit} placé à ({x_orig:.0f}, {y_orig:.0f}) px")
 
     if st.session_state["overrides"]:
         st.write("**Points corrigés :**")
@@ -348,3 +347,4 @@ with col_result:
             mime="application/pdf",
             use_container_width=True
         )
+
