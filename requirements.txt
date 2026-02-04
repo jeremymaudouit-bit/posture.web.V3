@@ -1,8 +1,7 @@
 streamlit
-tensorflow
-tensorflow-hub
+numpy==1.26.4
 opencv-python-headless
-numpy
-scipy
-matplotlib
-reportlab
+Pillow
+fpdf2==2.7.9
+mediapipe==0.10.9
+protobuf==3.20.3
