@@ -162,8 +162,8 @@ if image_data:
 
             raw_hip_angle = math.degrees(math.atan2(LH[1]-RH[1], LH[0]-RH[0]))
             hip_angle = abs(raw_hip_angle)
-            if hip_angle > 90:
-            hip_angle = abs(hip_angle - 180)
+            if  hip_angle > 90:
+                hip_angle = abs(hip_angle - 180)
 
 
             knee_l = calculate_angle(LH, LK, LA)
@@ -234,4 +234,5 @@ if image_data:
                 # Nettoyage fichier temporaire
                 if os.path.exists("temp_analysis.png"):
                     os.remove("temp_analysis.png")
+
 
