@@ -392,19 +392,46 @@ with col_result:
     st.subheader("📊 Résultats")
     st.table(results)
 
-    st.subheader("🖼️ Image annotée")
-    # ✅ plus robuste que st.image(bytes)
+ st.subheader("🖼️ Image annotée")
 
 annotated = ensure_uint8_rgb(annotated)
 
-if annotated is None or annotated.size == 0 or annotated.ndim != 3 or annotated.shape[2] != 3:
-    st.error("Image annotée invalide (format inattendu).")
-else:
+try:
+    # 1) méthode standard Streamlit (très fiable si shape/dtype OK)
     st.image(
-        Image.fromarray(annotated, mode="RGB"),
+        annotated,
+        channels="RGB",
         caption="Points verts = utilisés | Violet = corrigé",
         use_container_width=True
     )
+except Exception as e:
+    st.error("Impossible d'afficher l'image annotée via st.image (mode numpy). Fallback PNG.")
+    st.write("Erreur:", repr(e))
+    if annotated is not None:
+        st.write("Debug annotated:", {
+            "shape": getattr(annotated, "shape", None),
+            "dtype": str(getattr(annotated, "dtype", None)),
+            "min": int(np.min(annotated)) if hasattr(annotated, "size") and annotated.size else None,
+            "max": int(np.max(annotated)) if hasattr(annotated, "size") and annotated.size else None,
+            "contiguous": bool(getattr(annotated, "flags", {}).get("C_CONTIGUOUS", False)) if hasattr(annotated, "flags") else None,
+        })
+
+    # 2) fallback ultime : on encode en PNG bytes et on redonne à Streamlit
+    try:
+        ann_bgr = cv2.cvtColor(annotated, cv2.COLOR_RGB2BGR)
+        ok, buf = cv2.imencode(".png", ann_bgr)
+        if ok:
+            st.image(
+                buf.tobytes(),
+                caption="Points verts = utilisés | Violet = corrigé",
+                use_container_width=True
+            )
+        else:
+            st.error("Fallback PNG échoué (cv2.imencode a retourné False).")
+    except Exception as e2:
+        st.error("Fallback PNG a aussi échoué.")
+        st.write("Erreur fallback:", repr(e2))
+
 
 
 
@@ -418,5 +445,6 @@ else:
         mime="application/pdf",
         use_container_width=True
     )
+
 
 
