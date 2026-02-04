@@ -1,7 +1,8 @@
 streamlit
-tensorflow==2.15.0
+tensorflow
 tensorflow-hub
-numpy
 opencv-python-headless
-pillow
-fpdf
+numpy
+scipy
+matplotlib
+reportlab
