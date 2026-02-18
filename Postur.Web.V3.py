@@ -210,8 +210,8 @@ def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
         return "ALERTE"
 
     pdf = FPDF()
-    pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
 
     # Bandeau
     pdf.set_fill_color(31, 73, 125)
@@ -232,13 +232,34 @@ def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
     pdf.ln(4)
 
-    # Image
+    # ================= IMAGE (FIT DANS LA PAGE + PLUS PETITE + CENTRÉE) =================
     tmp_img = os.path.join(tempfile.gettempdir(), "posture_tmp.png")
     Image.fromarray(img_rgb_uint8).save(tmp_img)
+
     pdf.set_font("Arial", 'B', 12)
     pdf.cell(0, 7, "Photographie annotée", ln=True)
-    pdf.image(tmp_img, x=45, w=120)
-    pdf.ln(4)
+
+    # Position actuelle et espace disponible
+    y = pdf.get_y()
+    page_w = pdf.w - 2 * pdf.l_margin
+    avail_h = pdf.h - pdf.b_margin - y
+
+    # Ratio image
+    ih, iw = img_rgb_uint8.shape[:2]
+    aspect = iw / ih  # largeur/hauteur
+
+    # Largeur cible "plus petite"
+    target_w = page_w * 0.62   # <-- diminue (0.5 / 0.45) si tu veux encore plus petit
+    target_h = target_w / aspect
+
+    # S'assurer que ça rentre verticalement (sinon FPDF pousse sur page suivante => page blanche)
+    if target_h > avail_h:
+        target_h = avail_h
+        target_w = target_h * aspect
+
+    x = (pdf.w - target_w) / 2
+    pdf.image(tmp_img, x=x, y=y, w=target_w, h=target_h)
+    pdf.set_y(y + target_h + 4)
 
     # Synthèse
     sh_mm = _to_float(data.get("Dénivelé Épaules (mm)"))
@@ -283,7 +304,10 @@ def generate_pdf(data: dict, img_rgb_uint8: np.ndarray) -> bytes:
     pdf.cell(0, 10, "Document indicatif - Ne remplace pas un avis médical.", align="C")
 
     if os.path.exists(tmp_img):
-        os.remove(tmp_img)
+        try:
+            os.remove(tmp_img)
+        except Exception:
+            pass
 
     out = pdf.output(dest="S")
     if isinstance(out, (bytes, bytearray)):
@@ -425,7 +449,6 @@ with col_input:
     origin_points = extract_origin_points_from_mediapipe(img_np)
     preview = draw_preview(img_disp, origin_points, st.session_state["override_one"], scale)
 
-    # IMPORTANT: streamlit_image_coordinates affiche déjà l'image => pas de st.image() sinon doublon
     coords = streamlit_image_coordinates(
         Image.open(io.BytesIO(to_png_bytes(preview))),
         key="img_click",
@@ -486,7 +509,6 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
         "Talon G": LHE, "Talon D": RHE,
     }
 
-    # overrides
     for k, (x, y) in st.session_state["override_one"].items():
         if k in POINTS:
             POINTS[k] = np.array([x, y], dtype=np.float32)
@@ -553,7 +575,7 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
     }
 
 # =========================
-# 8) SORTIE (WEB + PDF) - mêmes données + CR médical
+# 8) SORTIE (WEB + PDF)
 # =========================
 with col_result:
     st.subheader("🧾 Compte-rendu d'analyse posturale")
@@ -654,8 +676,3 @@ with col_result:
         file_name=pdf_name,
         mime="application/pdf",
     )
-
-
-
-
-
