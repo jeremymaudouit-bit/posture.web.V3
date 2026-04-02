@@ -470,6 +470,9 @@ with col_input:
 # =========================
 # 7) ANALYSE
 # =========================
+# =========================
+# 7) ANALYSE
+# =========================
 with col_result:
     st.subheader("⚙️ Analyse")
     run = st.button("▶ Lancer l'analyse")
@@ -534,10 +537,23 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
     ankle_l = tibia_rearfoot_ankle_angle(LK, LA, LHE)
     ankle_r = tibia_rearfoot_ankle_angle(RK, RA, RHE)
 
+    # =========================
+    # CALCULS DISTANCES
+    # =========================
     px_height = max(LA[1], RA[1]) - min(LS[1], RS[1])
     mm_per_px = (float(taille_cm) * 10.0) / px_height if px_height > 0 else 0.0
+
+    # Épaules (inchangé)
     diff_shoulders_mm = abs(LS[1] - RS[1]) * mm_per_px
+
+    # Bassin méthode classique (inchangé)
     diff_hips_mm = abs(LH[1] - RH[1]) * mm_per_px
+
+    # 🔥 NOUVELLE MESURE : hanche → talon
+    left_length_px = abs(LH[1] - LHE[1])
+    right_length_px = abs(RH[1] - RHE[1])
+    diff_hips_func_px = abs(left_length_px - right_length_px)
+    diff_hips_func_mm = diff_hips_func_px * mm_per_px
 
     shoulder_lower = "Gauche" if LS[1] > RS[1] else "Droite"
     hip_lower = "Gauche" if LH[1] > RH[1] else "Droite"
@@ -568,6 +584,7 @@ with st.spinner("Détection (MediaPipe) + calculs..."):
         "Inclinaison Bassin (0=horizon)": f"{hip_angle:.1f}°",
         "Bassin le plus bas": hip_lower,
         "Dénivelé Bassin (mm)": f"{diff_hips_mm:.1f} mm",
+        "Dénivelé Bassin Fonctionnel (mm)": f"{diff_hips_func_mm:.1f} mm",
         "Angle Genou Gauche (fémur-tibia)": f"{knee_l:.1f}°",
         "Angle Genou Droit (fémur-tibia)": f"{knee_r:.1f}°",
         "Angle Cheville G (tibia-arrière-pied)": f"{ankle_l:.1f}°",
